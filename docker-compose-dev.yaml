@@ -1,0 +1,18 @@
+version: '3'
+services:
+  rabbitmq:
+    build:
+      context: ./middleware/rabbitmq
+      dockerfile: rabbitmq.dockerfile
+    ports:
+      - 15672:15672
+      #- "5672:5672" # conexión AMQP (que usa Pika por ejemplo, pero creo que si dockerizamos todo y creamos una red del tp esto no es necesario)
+    networks:
+      - coffee_analysis_net
+
+networks:
+  coffee_analysis_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.125.0/24
