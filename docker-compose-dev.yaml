@@ -10,7 +10,15 @@ services:
       #- "5672:5672" # conexión AMQP (que usa Pika por ejemplo, pero creo que si dockerizamos todo y creamos una red del tp esto no es necesario)
     networks:
       - coffee_analysis_net
-
+  app_controller:
+    #container_name: filter1
+    build:
+      context: ./app_controller/app_controller
+      dockerfile: Dockerfile
+    depends_on:
+      - rabbitmq
+    networks:
+      - coffee_analysis_net
   filter:
     #container_name: filter1
     build:
