@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from middleware.mom import MessageMiddlewareQueue
+from middleware.rabbitmq.mom import MessageMiddlewareQueue
 
 def main():
     # Conectamos al mismo host y cola que escucha el filter
@@ -8,7 +8,7 @@ def main():
     # Mandamos un mensaje de prueba
     mw.send("Hola filter!")
 
-    print("✅ Mensaje enviado a filter")
+    print("Mensaje enviado a filter")
 
     mw.close()
 
