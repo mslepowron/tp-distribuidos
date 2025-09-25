@@ -1,5 +1,9 @@
-# workers/filter/Dockerfile
 FROM rabbitmq-python-base:0.0.1
 
-COPY filter.py /root/filter.py
-CMD ["python3", "/root/filter.py"]
+WORKDIR /root/tp-distribuidos
+
+COPY . .
+
+ENV PYTHONPATH=/root/tp-distribuidos
+
+CMD ["python3", "workers/filter/filter.py"]

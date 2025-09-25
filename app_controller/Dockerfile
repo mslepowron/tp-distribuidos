@@ -1,4 +1,9 @@
 FROM rabbitmq-python-base:0.0.1
 
-COPY app_controller.py /root/app_controller.py
-CMD ["python3", "/root/app_controller.py"]
+WORKDIR /root/tp-distribuidos
+
+COPY . .
+
+ENV PYTHONPATH=/root/tp-distribuidos
+# Ejecutamos el archivo principal
+CMD ["python3", "app_controller/app_controller.py"]

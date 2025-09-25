@@ -6,7 +6,7 @@ from pika.exceptions import AMQPError, AMQPConnectionError
 
 PORT = 15672
 
-from .message_middleware import (
+from .middleware import (
     MessageMiddleware,
     MessageMiddlewareMessageError,
     MessageMiddlewareDisconnectedError,
@@ -28,7 +28,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
             self.connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
                     host=self.host,
-                    port=PORT,
+                    #port=PORT,
                     blocked_connection_timeout=30,
                 )
             )

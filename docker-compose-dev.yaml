@@ -13,8 +13,8 @@ services:
   app_controller:
     #container_name: filter1
     build:
-      context: ./app_controller
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: app_controller/Dockerfile
     depends_on:
       - rabbitmq
     networks:
@@ -22,8 +22,8 @@ services:
   filter:
     #container_name: filter1
     build:
-      context: ./workers/filter
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: workers/filter/Dockerfile
     depends_on:
       - rabbitmq
     networks:
