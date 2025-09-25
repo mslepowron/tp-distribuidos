@@ -1,20 +1,19 @@
 import time
-import socket
+import logging
 import pika
-from typing import Callable, Optional
-from pika.exceptions import AMQPError, AMQPConnectionError
 
 PORT = 15672
 
-from .middleware import (
+from ..middleware import (
     MessageMiddleware,
     MessageMiddlewareMessageError,
     MessageMiddlewareDisconnectedError,
     MessageMiddlewareCloseError,
     MessageMiddlewareDeleteError,
     MessageMiddlewareExchange,
-    MessageMiddlewareQueue,
 )
+
+logger = logging.getLogger("filter")
 
 class MessageMiddlewareQueue(MessageMiddleware):
     def __init__(self, host, queue_name):
@@ -24,19 +23,29 @@ class MessageMiddlewareQueue(MessageMiddleware):
         self.channel = None
         self._consuming = False
 
-        try:
-            self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(
-                    host=self.host,
-                    #port=PORT,
-                    blocked_connection_timeout=30,
-                )
-            )
-            self.channel = self.connection.channel()
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
-        except Exception as e:
-            raise MessageMiddlewareDisconnectedError(str(e))
+        max_retries = 5
+        delay = 3
 
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(
+                        host=self.host,
+                        port=5672,
+                        blocked_connection_timeout=30,
+                    )
+                )
+                self.channel = self.connection.channel()
+                self.channel.queue_declare(queue=self.queue_name, durable=True)
+                logger.info(f"Connected to RabbitMQ at {self.host}:{5672}")
+                break
+            except pika.exceptions.AMQPConnectionError as e:
+                logger.warning(f"Attempt {attempt}: Could not connect: {e}")
+                if attempt < max_retries:
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    raise MessageMiddlewareDisconnectedError(str(e))
     def start_consuming(self, on_message_callback):
         try:
             self._consuming = True

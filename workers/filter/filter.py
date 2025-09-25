@@ -1,50 +1,39 @@
-import pika
-import time
 import logging
+from middleware.rabbitmq.mom import MessageMiddlewareQueue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("filter")
 
-def connect_rabbitmq(max_retries=5, delay=3):
-    """Intenta conectarse a RabbitMQ con reintentos."""
-    for attempt in range(1, max_retries + 1):
-        try:
-            connection = pika.BlockingConnection(
-                pika.ConnectionParameters(
-                    host="rabbitmq",   # 👈 nombre del servicio en docker-compose
-                    port=5672,
-                    #credentials=pika.PlainCredentials("admin", "admin")
-                )
-            )
-            logger.info("Connected to RabbitMQ")
-            return connection
-        except Exception as e:
-            logger.warning(f"Attempt {attempt}: Could not connect to RabbitMQ: {e}")
-            if attempt < max_retries:
-                logger.info(f"Retrying in {delay} seconds...")
-                time.sleep(delay)
-    raise RuntimeError("Failed to connect to RabbitMQ after several attempts")
-
 def main():
-    connection = connect_rabbitmq()
-    channel = connection.channel()
+    try:
+        mw = MessageMiddlewareQueue(host="rabbitmq", queue_name="coffee_tasks")
+    except Exception as e:
+        logger.error(f"No se pudo conectar a RabbitMQ: {e}")
+        return
 
-    # Aseguramos que la cola exista
-    channel.queue_declare(queue="coffee_tasks")
-
-    logger.info("Waiting for messages...")
-
+    # Callback para procesar los mensajes
     def callback(ch, method, properties, body):
         logger.info(f"Received message: {body.decode()}")
+        
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    channel.basic_consume(queue="coffee_tasks", on_message_callback=callback, auto_ack=True)
-
+    # Iniciamos consumo
     try:
-        channel.start_consuming()
+        logger.info("Waiting for messages...")
+        mw.start_consuming(callback)
     except KeyboardInterrupt:
         logger.info("Shutting down consumer...")
-        channel.stop_consuming()
-        connection.close()
+        mw.stop_consuming()
+        try:
+            mw.close()
+        except Exception as e:
+            logger.warning(f"No se pudo cerrar correctamente la conexión: {e}")
+    except Exception as e:
+        logger.error(f"Error durante consumo de mensajes: {e}")
+        try:
+            mw.close()
+        except:
+            pass
 
 if __name__ == "__main__":
     main()
