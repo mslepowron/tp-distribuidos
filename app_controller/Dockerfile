@@ -5,5 +5,5 @@ WORKDIR /root/tp-distribuidos
 COPY . .
 
 ENV PYTHONPATH=/root/tp-distribuidos
-
-CMD ["python3", "workers/filter/filter.py"]
+# Ejecutamos el archivo principal
+CMD ["python3", "app_controller/app_controller.py"]
