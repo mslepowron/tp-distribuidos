@@ -3,6 +3,7 @@ import csv
 import sys
 from middleware.rabbitmq.mom import MessageMiddlewareQueue
 from communication.protocol.serialize import serialize_row
+from communication.protocol.deserialize import deserialize_batch
 from communication.protocol.schemas import RAW_SCHEMAS
 
 from pathlib import Path
@@ -16,17 +17,20 @@ CSV_FILE = BASE_DIR / "transactions.csv"
 BATCH_SIZE = 2
 
 class AppController:
-    def __init__(self, host, queue_name, csv_file, batch_size=10):
+    def __init__(self, host, queue_name, csv_file, batch_size=10, result_queue="coffee_results"):
         self.host = host
         self.queue_name = queue_name
+        self.result_queue = result_queue
         self.csv_file = csv_file
         self.batch_size = batch_size
         self.mw = None
+        self.result_mw = None
         self._running = False
 
     def connect_to_middleware(self):
         try:
             self.mw = MessageMiddlewareQueue(host=self.host, queue_name=self.queue_name)
+            self.result_mw = MessageMiddlewareQueue(host=self.host, queue_name=self.result_queue)
         except Exception as e:
             logger.error(f"No se pudo conectar a RabbitMQ: {e}")
             sys.exit(1)
@@ -35,12 +39,13 @@ class AppController:
         """Closing middleware connection for graceful shutdown"""
         logger.info("Shutting down AppController gracefully...")
         self._running = False
-        if self.mw:
-            try:
-                self.mw.close()
-                logger.info("Middleware connection closed.")
-            except Exception as e:
-                logger.warning(f"Error closing middleware: {e}")
+        for conn in [self.mw, self.result_mw]:
+            if conn:
+                try:
+                    self.mw.close()
+                    logger.info("Middleware connection closed.")
+                except Exception as e:
+                    logger.warning(f"Error closing middleware: {e}")
 
     def run(self):
         self.connect_to_middleware()
@@ -65,6 +70,22 @@ class AppController:
             logger.error(f"CSV file {self.csv_file} not found.")
         except Exception as e:
             logger.error(f"Error processing CSV: {e}")
+
+        def callback(ch, method, properties, body):
+            try:
+                from communication.protocol.deserialize import deserialize_batch
+                rows = deserialize_batch(body)
+                for row in rows:
+                    logger.info(f"Resultado recibido: {row}")
+            except Exception as e:
+                logger.error(f"Error deserializando resultado: {e}")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        logger.info("Esperando resultados...")
+        try:
+            self.result_mw.start_consuming(callback)
+        except Exception as e:
+            logger.error(f"Error consumiendo resultados: {e}")
         finally:
             self.shutdown()
 

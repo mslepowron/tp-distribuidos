@@ -1,6 +1,7 @@
 import logging
 from middleware.rabbitmq.mom import MessageMiddlewareQueue
 from communication.protocol.deserialize import deserialize_batch
+from communication.protocol.serialize import serialize_row
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("filter")
@@ -8,6 +9,7 @@ logger = logging.getLogger("filter")
 def main():
     try:
         mw = MessageMiddlewareQueue(host="rabbitmq", queue_name="coffee_tasks")
+        result_mw = MessageMiddlewareQueue(host="rabbitmq", queue_name="coffee_results")
     except Exception as e:
         logger.error(f"No se pudo conectar a RabbitMQ: {e}")
         return
@@ -32,6 +34,15 @@ def main():
             logger.info(f"F:{row})")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        if filtered_rows:
+            try:
+                csv_bytes = serialize_row(filtered_rows)  
+                result_mw.send(csv_bytes) 
+                logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
+            except Exception as e:
+                logger.error(f"Error enviando resultado: {e}")
+
 
     # Iniciamos consumo
     try:
