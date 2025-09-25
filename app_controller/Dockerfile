@@ -6,4 +6,4 @@ COPY . .
 
 ENV PYTHONPATH=/root/tp-distribuidos
 # Ejecutamos el archivo principal
-CMD ["python3", "app_controller/app_controller.py"]
+CMD ["python3", "app_controller/main.py"]
