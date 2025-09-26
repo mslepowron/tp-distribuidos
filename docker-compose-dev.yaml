@@ -1,7 +1,5 @@
-version: '3'
 services:
   rabbitmq:
-    #container_name: rabbitmq
     build:
       context: ./middleware/rabbitmq
       dockerfile: rabbitmq.dockerfile
@@ -11,16 +9,18 @@ services:
     networks:
       - coffee_analysis_net
   app_controller:
-    #container_name: filter1
     build:
       context: .
       dockerfile: app_controller/Dockerfile
     depends_on:
       - rabbitmq
+    environment:
+      - CONFIG_PATH=/config/config.ini
+    volumes:
+      - ./app_controller/config/config.ini:/config/config.ini:ro
     networks:
       - coffee_analysis_net
   filter:
-    #container_name: filter1
     build:
       context: .
       dockerfile: workers/filter/Dockerfile

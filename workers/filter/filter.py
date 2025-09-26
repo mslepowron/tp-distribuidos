@@ -1,8 +1,10 @@
 import logging
+
 from communication.protocol.deserialize import deserialize_batch
 from communication.protocol.serialize import serialize_row
 
 logger = logging.getLogger("filter")
+
 
 class Filter:
     def __init__(self, mw, result_mw, type='Amount'):
@@ -24,6 +26,7 @@ class Filter:
             self.close_mw()
             # no hay que cerrar la de result?
 
+
     def _close_mw(self):
         try:
             self.mw.close()
@@ -42,7 +45,10 @@ class Filter:
     def callback_filter_amount(self, ch, method, properties, body):
         filtered_rows = []
         try:
-            rows = deserialize_batch(body)
+            #rows = deserialize_batch(body) comento para probar nuevo protocolo
+
+            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+            logger.info(f"Header recibido: {header.as_dictionary()}")
 
             for row in rows:
                 original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0

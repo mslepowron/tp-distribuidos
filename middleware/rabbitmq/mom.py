@@ -97,7 +97,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
 logger = logging.getLogger("exchange")
 
 class MessageMiddlewareExchange(MessageMiddleware):
-    def __init__(self, host, exchange_name, exchange_type="direct", route_keys=None):
+    def __init__(self, host, exchange_name, exchange_type="fanout", route_keys=None):
         self.host = host
         self.exchange_name = exchange_name
         self.exchange_type = exchange_type
@@ -123,7 +123,7 @@ class MessageMiddlewareExchange(MessageMiddleware):
                                               durable=True)
                 
                 for rk in self.route_keys:
-                    queue_name = f"{self.exchange_name}_{rk}"
+                    queue_name = rk
                     self.channel.queue_declare(queue=queue_name, durable=True)
                     self.channel.queue_bind(exchange=self.exchange_name, queue=queue_name, routing_key=rk)
                 
@@ -137,14 +137,14 @@ class MessageMiddlewareExchange(MessageMiddleware):
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
     
-    
-    def start_consuming(self, on_message_callback):
+
+    def start_consuming(self, on_message_callback, queues=None):
         try:
             self._consuming = True
-            for rk in self.route_keys:
-                queue_name = f"{self.exchange_name}_{rk}"
+            queues_to_consume = queues or self.route_keys
+            for q in queues_to_consume:
                 self.channel.basic_consume(
-                    queue=queue_name,
+                    queue=q,
                     on_message_callback=on_message_callback,
                     auto_ack=False
                 )
@@ -159,11 +159,12 @@ class MessageMiddlewareExchange(MessageMiddleware):
             self.channel.stop_consuming()
             self._consuming = False
     
-    def send(self, message, route_key = None):
+    def send(self, message, exchange=None, route_key = None):
         try:
+            exchange = exchange or self.exchange_name
             routing_key = route_key or (self.route_keys[0] if self.route_keys else "")
             self.channel.basic_publish(
-                exchange=self.exchange_name,
+                exchange=exchange,
                 routing_key=routing_key,
                 body=message,
                 properties=pika.BasicProperties(delivery_mode=2), #TODO: Chequear bien este delivery mode
