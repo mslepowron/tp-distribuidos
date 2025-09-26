@@ -97,7 +97,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
 logger = logging.getLogger("exchange")
 
 class MessageMiddlewareExchange(MessageMiddleware):
-    def __init__(self, host, exchange_name, exchange_type="direct", route_keys=None):
+    def __init__(self, host, exchange_name, exchange_type="fanout", route_keys=None):
         self.host = host
         self.exchange_name = exchange_name
         self.exchange_type = exchange_type
@@ -137,22 +137,6 @@ class MessageMiddlewareExchange(MessageMiddleware):
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
     
-    
-    # def start_consuming(self, on_message_callback):
-    #     try:
-    #         self._consuming = True
-    #         for rk in self.route_keys:
-    #             queue_name = f"{self.exchange_name}_{rk}"
-    #             self.channel.basic_consume(
-    #                 queue=queue_name,
-    #                 on_message_callback=on_message_callback,
-    #                 auto_ack=False
-    #             )
-    #         self.channel.start_consuming()
-    #     except pika.exceptions.AMQPConnectionError as e:
-    #         raise MessageMiddlewareDisconnectedError(str(e))
-    #     except Exception as e:
-    #         raise MessageMiddlewareMessageError(str(e))
 
     def start_consuming(self, on_message_callback, queues=None):
         try:
