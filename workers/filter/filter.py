@@ -10,7 +10,7 @@ logger = logging.getLogger("filter")
 
 
 class Filter:
-    def __init__(self, mw, result_mw, type='Year'):
+    def __init__(self, mw, result_mw, type='Amount'):
         self.type = type
         self.mw = mw
         self.result_mw = result_mw
@@ -44,38 +44,6 @@ class Filter:
             logger.error(f"QUE PUEDO SABER EU DESA SITUASAUN")
 
 
-    def callback_filter_amount(self, ch, method, properties, body):
-        logger.warning(f"IMPLEMENTAR NUEVO PROTOCOLO")
-        # filtered_rows = []
-        # try:
-        #     #rows = deserialize_batch(body) comento para probar nuevo protocolo
-
-        #     header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-        #     logger.info(f"Header recibido: {header.as_dictionary()}")
-
-        #     for row in rows:
-        #         original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0
-        #         if original_amount > 75:
-        #             filtered_rows.append(row)
-
-        # except Exception as e:
-        #     logger.error(f"Error procesando mensaje: {e}")
-
-        # logger.info("Imprimo filas")
-        # for row in filtered_rows:
-        #     logger.info(f"F:{row})")
-
-        # ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        # if filtered_rows:
-        #     try:
-        #         csv_bytes = serialize_row(filtered_rows)
-        #         self.result_mw.send(csv_bytes)
-        #         logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
-        #     except Exception as e:
-        #         logger.error(f"Error enviando resultado: {e}")
-    
-    
     def callback_filter_year(self, ch, method, properties, body):
         filtered_rows = []
         try:
@@ -116,6 +84,50 @@ class Filter:
 
                 self.result_mw.send(csv_bytes, route_key="coffee_results") #esta es la key que usa el app controller para bindearse con el exchange de results y consumir resultados
                 #result_mw.send(csv_bytes, route_key="year") #esto publicaria directamente con routing a la cola del filter hours
+                logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
+            except Exception as e:
+                logger.error(f"Error enviando resultado: {e}")
+
+
+    def callback_filter_amount(self, ch, method, properties, body):
+        filtered_rows = []
+        try:
+            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+            logger.info(f"Header recibido: {header.as_dictionary()}")
+
+            for row in rows:
+                original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0
+                if original_amount > 75:
+                    # almaceno fila del batch
+                    filtered_rows.append(row)
+
+        except Exception as e:
+            logger.error(f"Error procesando mensaje: {e}")
+        
+        logger.info(f"Imprimo filas")
+        for row in filtered_rows:
+            logger.info(f"F:{row})")
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        if filtered_rows:
+            try:
+                # construir nuevo header
+                result_header = Header({
+                    "message_type": "DATA",
+                    "query_id": header.fields["query_id"],
+                    "stage": "FILTERED",
+                    "part": "transactions.filtered",
+                    "seq": str(uuid4()),
+                    "schema": header.fields["schema"],
+                    "source": "filter"
+                })
+                # serializar correctamente
+                schema_name = header.fields["schema"]
+                schema_fields = RAW_SCHEMAS[schema_name]
+                csv_bytes = serialize_message(result_header, filtered_rows, schema_fields)
+
+                self.result_mw.send(csv_bytes, route_key="coffee_results")
                 logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
             except Exception as e:
                 logger.error(f"Error enviando resultado: {e}")
