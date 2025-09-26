@@ -6,4 +6,4 @@ COPY . .
 
 ENV PYTHONPATH=/root/tp-distribuidos
 
-CMD ["python3", "workers/filter/filter.py"]
+CMD ["python3", "workers/filter/main.py"]
