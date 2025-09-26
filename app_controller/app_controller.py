@@ -1,10 +1,12 @@
 import logging
+from uuid import uuid4
 import csv
 import sys
-from middleware.rabbitmq.mom import MessageMiddlewareQueue
-from communication.protocol.serialize import serialize_row
-from communication.protocol.deserialize import deserialize_batch
+from middleware.rabbitmq.mom import MessageMiddlewareExchange
+from communication.protocol.message import Header
+from communication.protocol.serialize import serialize_message
 from communication.protocol.schemas import RAW_SCHEMAS
+from communication.protocol.deserialize import deserialize_message
 
 from pathlib import Path
 
@@ -14,23 +16,36 @@ logger = logging.getLogger("app_controller")
 BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
 CSV_FILE = BASE_DIR / "transactions.csv"
 
-BATCH_SIZE = 2
+BATCH_SIZE = 2 #TODO> Varialbe de entorno
 
 class AppController:
-    def __init__(self, host, queue_name, csv_file, batch_size=10, result_queue="coffee_results"):
+    def __init__(self, host, input_exchange, routing_keys, 
+                 result_exchange, result_queue):
         self.host = host
-        self.queue_name = queue_name
+        self.input_exchange = input_exchange
+        self.routing_keys = routing_keys
+        self.result_exchange = result_exchange
         self.result_queue = result_queue
-        self.csv_file = csv_file
-        self.batch_size = batch_size
-        self.mw = None
+        self.mw_exchange = None
         self.result_mw = None
         self._running = False
 
     def connect_to_middleware(self):
         try:
-            self.mw = MessageMiddlewareQueue(host=self.host, queue_name=self.queue_name)
-            self.result_mw = MessageMiddlewareQueue(host=self.host, queue_name=self.result_queue)
+            self.mw_exchange = MessageMiddlewareExchange(
+                host=self.host,
+                exchange_name=self.input_exchange,
+                exchange_type="direct", #TODO: Esto va a depender de la query creo...
+                route_keys= self.routing_keys
+            )
+
+            #Exchange con binding a la cola de donde va a recibir los resultados de las queries
+            self.result_mw = MessageMiddlewareExchange(
+                host=self.host,
+                exchange_name=self.result_exchange,
+                exchange_type="direct",
+                route_keys=[self.result_queue]
+            ) 
         except Exception as e:
             logger.error(f"No se pudo conectar a RabbitMQ: {e}")
             sys.exit(1)
@@ -39,10 +54,11 @@ class AppController:
         """Closing middleware connection for graceful shutdown"""
         logger.info("Shutting down AppController gracefully...")
         self._running = False
-        for conn in [self.mw, self.result_mw]:
+        for conn in [self.mw_exchange, self.result_mw]:
             if conn:
                 try:
-                    self.mw.close()
+                    self.mw_exchange.close()
+                    self.result_mw.close()
                     logger.info("Middleware connection closed.")
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
@@ -52,14 +68,14 @@ class AppController:
         self._running = True
 
         try:
-            with open(CSV_FILE, newline="") as csvfile:
+            with open(CSV_FILE, newline="") as csvfile: #TODO: El csv file debe ser dinamico, viene como un stream de datos dsde el gateway
                 reader = csv.DictReader(csvfile)
                 batch = []
                 for row in reader:
                     if not self._running:
                         break
                     batch.append(row)
-                    if len(batch) >= self.batch_size:
+                    if len(batch) >= BATCH_SIZE:
                         self.send_batch(batch)
                         batch = []
 
@@ -67,14 +83,15 @@ class AppController:
                     self.send_batch(batch)
 
         except FileNotFoundError:
-            logger.error(f"CSV file {self.csv_file} not found.")
+            logger.error(f"CSV file {CSV_FILE} not found.")
         except Exception as e:
             logger.error(f"Error processing CSV: {e}")
 
         def callback(ch, method, properties, body):
             try:
-                from communication.protocol.deserialize import deserialize_batch
-                rows = deserialize_batch(body)
+                # Deserializar con tu nuevo protocolo
+                header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+                logger.info(f"Header resultado: {header.as_dictionary()}")
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
             except Exception as e:
@@ -83,7 +100,7 @@ class AppController:
 
         logger.info("Esperando resultados...")
         try:
-            self.result_mw.start_consuming(callback)
+            self.result_mw.start_consuming(callback, queues=[self.result_queue]) #No me da confianza dejar definido la queue_name en el callback
         except Exception as e:
             logger.error(f"Error consumiendo resultados: {e}")
         finally:
@@ -95,8 +112,24 @@ class AppController:
                 break
             try:
                 # Serializar usando RAW_SCHEMAS["transactions.raw"]
-                message_bytes = serialize_row([record])
-                self.mw.send(message_bytes)
+                #message_bytes = serialize_row([record])
+                #self.mw.send(message_bytes, route_key="filters_year") #TODO: Esto esta hardcodeado para el filter d anios
+                #comento lo de arriba para probar el nuevo protocolo
+                header_fields = [
+                    ("message_type", "DATA"),
+                    ("query_id", "q_amount_75_tx"),  # ejemplo fijo
+                    ("stage", "FILTER"),
+                    ("part", "transactions.raw"),
+                    ("seq", str(uuid4())),  # podés poner contador si preferís
+                    ("schema", "transactions.raw"),
+                    ("source", "app_controller")
+                ]
+                header = Header(header_fields)
+
+                message_bytes = serialize_message(header, [record], RAW_SCHEMAS["transactions.raw"])
+                route_key = self.routing_keys[0] if self.routing_keys else ""
+                self.mw_exchange.send(message_bytes, route_key=route_key)
+                #hasta aca pruebo lo mio
                 logger.info(f"Message Sent: {record}")
             except Exception as e:
                 logger.error(f"Error sending message: {e}")
