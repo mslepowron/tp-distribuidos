@@ -17,6 +17,10 @@ services:
       dockerfile: app_controller/Dockerfile
     depends_on:
       - rabbitmq
+    environment:
+      - CONFIG_PATH=/config/config.ini
+    volumes:
+      - ./app_controller/config/config.ini:/config/config.ini:ro
     networks:
       - coffee_analysis_net
   filter:
