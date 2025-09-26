@@ -1,7 +1,7 @@
 import logging
 import csv
 import sys
-from middleware.rabbitmq.mom import MessageMiddlewareQueue
+from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.serialize import serialize_row
 from communication.protocol.deserialize import deserialize_batch
 from communication.protocol.schemas import RAW_SCHEMAS
@@ -14,23 +14,39 @@ logger = logging.getLogger("app_controller")
 BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
 CSV_FILE = BASE_DIR / "transactions.csv"
 
-BATCH_SIZE = 2
+BATCH_SIZE = 2 #TODO> Varialbe de entorno
 
 class AppController:
-    def __init__(self, host, queue_name, csv_file, batch_size=10, result_queue="coffee_results"):
+    # def __init__(self, host, exchange_name, /*queue_name*/, csv_file, result_queue="coffee_results"):
+    def __init__(self, host, exchange_name, csv_file, result_queue="coffee_results"):
         self.host = host
-        self.queue_name = queue_name
-        self.result_queue = result_queue
+        self.exchange_name = exchange_name
+        #self.queue_name = queue_name    #TODO Remove -> ahora manda a exchange
+        self.result_queue = result_queue #TODO> Check si recibe directo de una results queue o hay que bindearlo a un exchange
         self.csv_file = csv_file
-        self.batch_size = batch_size
-        self.mw = None
+        self.batch_size = BATCH_SIZE
+        self.mw = None  #TODO> Mejorar este nombre
         self.result_mw = None
         self._running = False
 
     def connect_to_middleware(self):
         try:
-            self.mw = MessageMiddlewareQueue(host=self.host, queue_name=self.queue_name)
-            self.result_mw = MessageMiddlewareQueue(host=self.host, queue_name=self.result_queue)
+            # self.mw = MessageMiddlewareQueue(host=self.host, queue_name=self.queue_name)
+            # self.result_mw = MessageMiddlewareQueue(host=self.host, queue_name=self.result_queue)
+            self.mw = MessageMiddlewareExchange(
+                host=self.host,
+                exchange_name=self.exchange_name,
+                exchange_type="direct",
+                route_keys=["filters_year", "filters_hour", "filters_amount"]   #TODO: Parametrizar route keys. Por ahora solo funca con filters de Q1
+            )
+
+            #Exchange con binding a la cola de donde va a recibir los resultados de las queries
+            self.result_mw = MessageMiddlewareExchange(
+                host=self.host,
+                exchange_name="results",
+                exchange_type="direct",
+                route_keys=[self.result_queue]
+            ) #TODO: Parametrizar nombre del exchange de results,
         except Exception as e:
             logger.error(f"No se pudo conectar a RabbitMQ: {e}")
             sys.exit(1)
@@ -43,6 +59,7 @@ class AppController:
             if conn:
                 try:
                     self.mw.close()
+                    self.result_mw.close()
                     logger.info("Middleware connection closed.")
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
@@ -52,7 +69,7 @@ class AppController:
         self._running = True
 
         try:
-            with open(CSV_FILE, newline="") as csvfile:
+            with open(CSV_FILE, newline="") as csvfile: #TODO: El csv file debe ser dinamico, viene como un stream de datos dsde el gateway
                 reader = csv.DictReader(csvfile)
                 batch = []
                 for row in reader:
@@ -73,7 +90,6 @@ class AppController:
 
         def callback(ch, method, properties, body):
             try:
-                from communication.protocol.deserialize import deserialize_batch
                 rows = deserialize_batch(body)
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
@@ -83,7 +99,7 @@ class AppController:
 
         logger.info("Esperando resultados...")
         try:
-            self.result_mw.start_consuming(callback)
+            self.result_mw.start_consuming(callback, queues=[self.result_queue]) #No me da confianza dejar definido la queue_name en el callback
         except Exception as e:
             logger.error(f"Error consumiendo resultados: {e}")
         finally:
@@ -96,7 +112,7 @@ class AppController:
             try:
                 # Serializar usando RAW_SCHEMAS["transactions.raw"]
                 message_bytes = serialize_row([record])
-                self.mw.send(message_bytes)
+                self.mw.send(message_bytes, route_key="filters_year") #TODO: Esto esta hardcodeado para el filter d anios
                 logger.info(f"Message Sent: {record}")
             except Exception as e:
                 logger.error(f"Error sending message: {e}")

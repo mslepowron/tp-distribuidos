@@ -13,9 +13,9 @@ def graceful_shutdown(signum, frame):
 def main():
     controller = AppController(
         host="rabbitmq",
-        queue_name="coffee_tasks",
+        exchange_name="filters",
+        #queue_name="coffee_tasks",
         csv_file=CSV_FILE,
-        batch_size=5
     )
 
     graceful_shutdown.controller = controller
