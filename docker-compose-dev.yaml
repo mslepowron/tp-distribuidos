@@ -1,7 +1,5 @@
-version: '3'
 services:
   rabbitmq:
-    #container_name: rabbitmq
     build:
       context: ./middleware/rabbitmq
       dockerfile: rabbitmq.dockerfile
@@ -11,7 +9,6 @@ services:
     networks:
       - coffee_analysis_net
   app_controller:
-    #container_name: filter1
     build:
       context: .
       dockerfile: app_controller/Dockerfile
@@ -20,7 +17,6 @@ services:
     networks:
       - coffee_analysis_net
   filter:
-    #container_name: filter1
     build:
       context: .
       dockerfile: workers/filter/Dockerfile

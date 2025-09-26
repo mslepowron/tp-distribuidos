@@ -1,10 +1,12 @@
 import logging
+from uuid import uuid4
 import csv
 import sys
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
-from communication.protocol.serialize import serialize_row
-from communication.protocol.deserialize import deserialize_batch
+from communication.protocol.message import Header
+from communication.protocol.serialize import serialize_message
 from communication.protocol.schemas import RAW_SCHEMAS
+from communication.protocol.deserialize import deserialize_message
 
 from pathlib import Path
 
@@ -90,7 +92,9 @@ class AppController:
 
         def callback(ch, method, properties, body):
             try:
-                rows = deserialize_batch(body)
+                # Deserializar con tu nuevo protocolo
+                header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+                logger.info(f"Header resultado: {header.as_dictionary()}")
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
             except Exception as e:
@@ -111,8 +115,23 @@ class AppController:
                 break
             try:
                 # Serializar usando RAW_SCHEMAS["transactions.raw"]
-                message_bytes = serialize_row([record])
-                self.mw.send(message_bytes, route_key="filters_year") #TODO: Esto esta hardcodeado para el filter d anios
+                #message_bytes = serialize_row([record])
+                #self.mw.send(message_bytes, route_key="filters_year") #TODO: Esto esta hardcodeado para el filter d anios
+                #comento lo de arriba para probar el nuevo protocolo
+                header_fields = [
+                    ("message_type", "DATA"),
+                    ("query_id", "q_amount_75_tx"),  # ejemplo fijo
+                    ("stage", "FILTER"),
+                    ("part", "transactions.raw"),
+                    ("seq", str(uuid4())),  # podés poner contador si preferís
+                    ("schema", "transactions.raw"),
+                    ("source", "app_controller")
+                ]
+                header = Header(header_fields)
+
+                message_bytes = serialize_message(header, [record], RAW_SCHEMAS["transactions.raw"])
+                self.mw.send(message_bytes, route_key="filters_year")
+                #hasta aca pruebo lo mio
                 logger.info(f"Message Sent: {record}")
             except Exception as e:
                 logger.error(f"Error sending message: {e}")
