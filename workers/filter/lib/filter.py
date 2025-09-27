@@ -15,6 +15,7 @@ class Filter:
         self.type = filter_type
         self.mw = mw
         self.result_mw = result_mw
+        self.has_sent_any_result = False
     
     def start(self):
         try:
@@ -51,56 +52,64 @@ class Filter:
         filtered_rows = []
         try:
             header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            # logger.info(f"Header recibido: {header.as_dictionary()}")
+            is_eof = self.handle_EOF(body, header)
+            if not is_eof:
 
-            for row in rows:
-                year = int(row["created_at"].split("-")[0])
-                if year in [2024, 2025]:
-                    filtered_rows.append(row)
+                for row in rows:
+                    year = int(row["created_at"].split("-")[0])
+                    if year in [2024, 2025]:
+                        filtered_rows.append(row)
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                self.send_to_next_step(filtered_rows, header)
+            else:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
             logger.error(f"Error procesando mensaje: {e}")
-
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        self.send_to_next_step(filtered_rows, header)
     
     def callback_filter_amount(self, ch, method, properties, body):
         filtered_rows = []
         try:
             header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            # logger.info(f"Header recibido: {header.as_dictionary()}")
+            is_eof = self.handle_EOF(body, header)
+            if not is_eof:
 
-            for row in rows:
-                final_amount = float(row["final_amount"]) if row["final_amount"] else 0.0
-                if final_amount > 75:
-                    # almaceno fila del batch
-                    filtered_rows.append(row)
-
+                for row in rows:
+                    final_amount = float(row["final_amount"]) if row["final_amount"] else 0.0
+                    if final_amount > 75:
+                        # almaceno fila del batch
+                        filtered_rows.append(row)
+                        
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                self.send_to_next_step(filtered_rows, header)
+            else:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
             logger.error(f"Error procesando mensaje: {e}")
 
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        self.send_to_next_step(filtered_rows, header)
     
     def callback_filter_hour(self, ch, method, properties, body):
         filtered_rows = []
         try:
             header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+            is_eof = self.handle_EOF(body, header)
+            if not is_eof:
             
-            for row in rows:
-                hour = int(row["created_at"].split(" ")[1].split(":")[0])
-                if hour >= 6 and hour < 23:
-                    filtered_rows.append(row)
+                for row in rows:
+                    hour = int(row["created_at"].split(" ")[1].split(":")[0])
+                    if hour >= 6 and hour < 23:
+                        filtered_rows.append(row)
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                self.send_to_next_step(filtered_rows, header)
+            else:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
             logger.error(f"Error procesando mensaje: {e}")
 
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        self.send_to_next_step(filtered_rows, header)
 
 
     def send_to_next_step(self, filtered_rows, header):
@@ -124,3 +133,12 @@ class Filter:
                 self.result_mw.send(csv_bytes, route_key=self.next_worker)
             except Exception as e:
                 logger.error(f"Error enviando resultado: {e}")
+
+    def handle_EOF(self, body, header):
+        if header.fields.get("message_type") == "EOF":
+            self.result_mw.send(body, route_key=self.next_worker)
+            logger.info("Mensaje EOF reenviado al siguiente paso")
+            return True
+        return False
+
+ 

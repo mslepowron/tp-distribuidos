@@ -81,6 +81,7 @@ class AppController:
 
                 if batch and self._running:
                     self.send_batch(batch)
+            self.send_end_of_file()
 
         except FileNotFoundError:
             logger.error(f"CSV file {CSV_FILE} not found.")
@@ -129,4 +130,25 @@ class AppController:
 
         except Exception as e:
             logger.error(f"Error enviando batch: {e}")
+
+    def send_end_of_file(self):
+        try:
+            header_fields = [
+                ("message_type", "EOF"),
+                ("query_id", "q_amount_75_tx"),
+                ("stage", "FILTER"),
+                ("part", "transactions.raw"),
+                ("seq", str(uuid4())),
+                ("schema", "transactions.raw"),
+                ("source", "app_controller")
+            ]
+            header = Header(header_fields)
+            # Enviamos un mensaje vacío, el filtro lo va a interpretar
+            message_bytes = serialize_message(header, [], RAW_SCHEMAS["transactions.raw"])
+            route_key = self.routing_keys[0] if self.routing_keys else ""
+            self.mw_exchange.send(message_bytes, route_key=route_key)
+            logger.info("Mensaje END_OF_FILE enviado al filtro")
+        except Exception as e:
+            logger.error(f"Error enviando END_OF_FILE: {e}")
+
     
