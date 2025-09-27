@@ -1,7 +1,7 @@
 import logging
 import os
 from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-from filter import Filter
+from lib.filter import Filter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")

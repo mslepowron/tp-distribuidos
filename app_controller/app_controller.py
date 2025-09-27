@@ -16,7 +16,7 @@ logger = logging.getLogger("app_controller")
 BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
 CSV_FILE = BASE_DIR / "transactions.csv"
 
-BATCH_SIZE = 2 #TODO> Varialbe de entorno
+BATCH_SIZE = 5 #TODO> Varialbe de entorno
 
 class AppController:
     def __init__(self, host, input_exchange, routing_keys, 
@@ -107,29 +107,26 @@ class AppController:
             self.shutdown()
 
     def send_batch(self, batch):
-        for record in batch:
-            if not self._running:
-                break
-            try:
-                # Serializar usando RAW_SCHEMAS["transactions.raw"]
-                #message_bytes = serialize_row([record])
-                #self.mw.send(message_bytes, route_key="filters_year") #TODO: Esto esta hardcodeado para el filter d anios
-                #comento lo de arriba para probar el nuevo protocolo
-                header_fields = [
-                    ("message_type", "DATA"),
-                    ("query_id", "q_amount_75_tx"),  # ejemplo fijo
-                    ("stage", "FILTER"),
-                    ("part", "transactions.raw"),
-                    ("seq", str(uuid4())),  # podés poner contador si preferís
-                    ("schema", "transactions.raw"),
-                    ("source", "app_controller")
-                ]
-                header = Header(header_fields)
+        if not self._running or not batch:
+            return
+        try:
+            header_fields = [
+                ("message_type", "DATA"),
+                ("query_id", "q_amount_75_tx"),  # TODO: Cambiar según la query - Esto esta hardcodeado
+                ("stage", "FILTER"),
+                ("part", "transactions.raw"),
+                ("seq", str(uuid4())),
+                ("schema", "transactions.raw"),
+                ("source", "app_controller")
+            ]
+            header = Header(header_fields)
 
-                message_bytes = serialize_message(header, [record], RAW_SCHEMAS["transactions.raw"])
-                route_key = self.routing_keys[0] if self.routing_keys else ""
-                self.mw_exchange.send(message_bytes, route_key=route_key)
-                #hasta aca pruebo lo mio
-                logger.info(f"Message Sent: {record}")
-            except Exception as e:
-                logger.error(f"Error sending message: {e}")
+            message_bytes = serialize_message(header, batch, RAW_SCHEMAS["transactions.raw"])
+            route_key = self.routing_keys[0] if self.routing_keys else ""
+            self.mw_exchange.send(message_bytes, route_key=route_key)
+
+            logger.info(f"Batch enviado con {len(batch)} filas")
+
+        except Exception as e:
+            logger.error(f"Error enviando batch: {e}")
+    

@@ -72,10 +72,11 @@ class Filter:
             # logger.info(f"Header recibido: {header.as_dictionary()}")
 
             for row in rows:
-                original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0
-                if original_amount > 75:
+                final_amount = float(row["final_amount"]) if row["final_amount"] else 0.0
+                if final_amount > 75:
                     # almaceno fila del batch
                     filtered_rows.append(row)
+
 
         except Exception as e:
             logger.error(f"Error procesando mensaje: {e}")
@@ -120,8 +121,6 @@ class Filter:
                 schema_fields = RAW_SCHEMAS[schema_name]
                 csv_bytes = serialize_message(result_header, filtered_rows, schema_fields)
 
-                # self.result_mw.send(csv_bytes, route_key="coffee_results")
                 self.result_mw.send(csv_bytes, route_key=self.next_worker)
-                logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
             except Exception as e:
                 logger.error(f"Error enviando resultado: {e}")
