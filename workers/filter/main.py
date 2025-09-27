@@ -19,7 +19,6 @@ def main():
         #result_mw = mw #este year filter se lo pasa al hour filter. Publicamos los resultados en el mismo exchange
         
         if next_worker == "coffee_results":
-            logger.error(f"ESTA MANDA LA DATAAAA")
             result_mw = MessageMiddlewareExchange(
                 host="rabbitmq",
                 exchange_name="results",
@@ -27,7 +26,6 @@ def main():
                 route_keys=["coffee_results"]  # el app_controller está bindeado a esto
             )
         else:
-            logger.info(f"No va al result wueeeee")
             result_mw = mw
             
     except Exception as e:

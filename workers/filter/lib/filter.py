@@ -45,7 +45,7 @@ class Filter:
         elif self.type == 'Hour':
             self.mw.start_consuming(self.callback_filter_hour, queues=["filters_hour"])
         else:
-            logger.error(f"QUE PUEDO SABER EU DESA SITUASAUN")
+            logger.error(f"Non valid filter type: {self.type}")
 
 
     def callback_filter_year(self, ch, method, properties, body):
@@ -117,13 +117,13 @@ class Filter:
             try:
                 # construir nuevo header
                 result_header = Header({
-                    "message_type": "DATA",
+                    "message_type": header.fields["message_type"],
                     "query_id": header.fields["query_id"],
-                    "stage": "FILTERED",
-                    "part": "transactions.filtered",
-                    "seq": str(uuid4()),
+                    "stage": self.type,
+                    "part": header.fields["part"],
+                    "seq": header.fields["seq"],
                     "schema": header.fields["schema"],
-                    "source": "filter"
+                    "source": header.fields["source"]
                 })
                 # serializar correctamente
                 schema_name = header.fields["schema"]
@@ -136,6 +136,7 @@ class Filter:
 
     def handle_EOF(self, body, header):
         if header.fields.get("message_type") == "EOF":
+            logger.info("All messages recieved. Sending EOF...")
             self.result_mw.send(body, route_key=self.next_worker)
             logger.info("Mensaje EOF reenviado al siguiente paso")
             return True
