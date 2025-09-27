@@ -20,10 +20,24 @@ services:
       - ./app_controller/config/config.ini:/config/config.ini:ro
     networks:
       - coffee_analysis_net
-  filter:
+  filter_amount:
     build:
       context: .
       dockerfile: workers/filter/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - FILTER_TYPE=Amount
+      - RESULT_QUEUE=coffee_results
+    networks:
+      - coffee_analysis_net
+  filter_year:
+    build:
+      context: .
+      dockerfile: workers/filter/Dockerfile
+    environment:
+      - FILTER_TYPE=Year
+      - RESULT_QUEUE=filters_amount
     depends_on:
       - rabbitmq
     networks:

@@ -10,8 +10,9 @@ logger = logging.getLogger("filter")
 
 
 class Filter:
-    def __init__(self, mw, result_mw, type='Year'):
-        self.type = type
+    def __init__(self, mw, result_mw, next_worker, filter_type='Year'):
+        self.next_worker = next_worker
+        self.type = filter_type
         self.mw = mw
         self.result_mw = result_mw
     
@@ -27,7 +28,6 @@ class Filter:
             logger.error(f"Error durante consumo de mensajes: {e}")
             self.close_mw()
             # no hay que cerrar la de result?
-
 
     def _close_mw(self):
         try:
@@ -48,7 +48,7 @@ class Filter:
         filtered_rows = []
         try:
             header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            logger.info(f"Header recibido: {header.as_dictionary()}")
+            # logger.info(f"Header recibido: {header.as_dictionary()}")
 
             for row in rows:
                 year = int(row["created_at"].split("-")[0])
@@ -67,7 +67,7 @@ class Filter:
         filtered_rows = []
         try:
             header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            logger.info(f"Header recibido: {header.as_dictionary()}")
+            # logger.info(f"Header recibido: {header.as_dictionary()}")
 
             for row in rows:
                 original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0
@@ -101,7 +101,8 @@ class Filter:
                 schema_fields = RAW_SCHEMAS[schema_name]
                 csv_bytes = serialize_message(result_header, filtered_rows, schema_fields)
 
-                self.result_mw.send(csv_bytes, route_key="coffee_results")
+                # self.result_mw.send(csv_bytes, route_key="coffee_results")
+                self.result_mw.send(csv_bytes, route_key=self.next_worker)
                 logger.info(f"Resultado enviado con {len(filtered_rows)} filas")
             except Exception as e:
-                logger.error(f"Error enviando resultado: {e}")
+                logger.error(f"Error enviando resultado: {e}")
