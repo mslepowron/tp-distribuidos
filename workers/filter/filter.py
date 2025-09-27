@@ -32,6 +32,7 @@ class Filter:
     def _close_mw(self):
         try:
             self.mw.close()
+            self.result_mw.close()
         except Exception as e:
             logger.warning(f"No se pudo cerrar correctamente la conexion: {e}")
 
@@ -40,6 +41,8 @@ class Filter:
             self.mw.start_consuming(self.callback_filter_amount, queues=["filters_amount"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
         elif self.type == 'Year':
             self.mw.start_consuming(self.callback_filter_year, queues=["filters_year"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
+        elif self.type == 'Hour':
+            self.mw.start_consuming(self.callback_filter_hour, queues=["filters_hour"])
         else:
             logger.error(f"QUE PUEDO SABER EU DESA SITUASAUN")
 
@@ -61,8 +64,7 @@ class Filter:
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
         self.send_to_next_step(filtered_rows, header)
-
-
+    
     def callback_filter_amount(self, ch, method, properties, body):
         filtered_rows = []
         try:
@@ -73,6 +75,23 @@ class Filter:
                 original_amount = float(row["original_amount"]) if row["original_amount"] else 0.0
                 if original_amount > 75:
                     # almaceno fila del batch
+                    filtered_rows.append(row)
+
+        except Exception as e:
+            logger.error(f"Error procesando mensaje: {e}")
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        self.send_to_next_step(filtered_rows, header)
+    
+    def callback_filter_hour(self, ch, method, properties, body):
+        filtered_rows = []
+        try:
+            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+            
+            for row in rows:
+                hour = int(row["created_at"].split(" ")[1].split(":")[0])
+                if hour >= 6 and hour < 23:
                     filtered_rows.append(row)
 
         except Exception as e:

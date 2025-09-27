@@ -20,6 +20,28 @@ services:
       - ./app_controller/config/config.ini:/config/config.ini:ro
     networks:
       - coffee_analysis_net
+  filter_year:
+    build:
+      context: .
+      dockerfile: workers/filter/Dockerfile
+    environment:
+      - FILTER_TYPE=Year
+      - RESULT_QUEUE=filters_hour
+    depends_on:
+      - rabbitmq
+    networks:
+      - coffee_analysis_net
+  filter_hour:
+    build:
+      context: .
+      dockerfile: workers/filter/Dockerfile
+    environment:
+      - FILTER_TYPE=Hour
+      - RESULT_QUEUE=filters_amount
+    depends_on:
+      - rabbitmq
+    networks:
+      - coffee_analysis_net
   filter_amount:
     build:
       context: .
@@ -29,17 +51,6 @@ services:
     environment:
       - FILTER_TYPE=Amount
       - RESULT_QUEUE=coffee_results
-    networks:
-      - coffee_analysis_net
-  filter_year:
-    build:
-      context: .
-      dockerfile: workers/filter/Dockerfile
-    environment:
-      - FILTER_TYPE=Year
-      - RESULT_QUEUE=filters_amount
-    depends_on:
-      - rabbitmq
     networks:
       - coffee_analysis_net
 
