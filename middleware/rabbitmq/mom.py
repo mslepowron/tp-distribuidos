@@ -1,6 +1,7 @@
 import time
 import logging
 import pika
+from typing import List, Tuple, Optional
 
 from ..middleware import (
     MessageMiddleware,
@@ -12,8 +13,9 @@ from ..middleware import (
 
 MAX_RETRIES = 5
 DELAY = 5
-
 AMQP_PORT = 5672
+
+Binding = Tuple[str, str, str] #Info de (exchange, exchange?type, routing_key)
 
 logger = logging.getLogger("queue")
 
@@ -97,11 +99,9 @@ class MessageMiddlewareQueue(MessageMiddleware):
 logger = logging.getLogger("exchange")
 
 class MessageMiddlewareExchange(MessageMiddleware):
-    def __init__(self, host, exchange_name, exchange_type="fanout", route_keys=None):
+    def __init__(self, host, queue_name, bindings: Optional[List[Binding]] = None):
         self.host = host
-        self.exchange_name = exchange_name
-        self.exchange_type = exchange_type
-        self.route_keys = route_keys or []
+        self.queue_name = queue_name
         self.connection = None
         self.channel = None
         self._consuming = False
@@ -117,17 +117,13 @@ class MessageMiddlewareExchange(MessageMiddleware):
                 )
 
                 self.channel = self.connection.channel()
+                self.channel.queue_declare(queue=self.queue_name, durable=True)
 
-                self.channel.exchange_declare(exchange=self.exchange_name, 
-                                              exchange_type=self.exchange_type, 
-                                              durable=True)
+                if bindings:
+                    for ex_name, ex_type, r_key in bindings:
+                        self.bind_to_exchange(ex_name, ex_type, r_key)
                 
-                for rk in self.route_keys:
-                    queue_name = rk
-                    self.channel.queue_declare(queue=queue_name, durable=True)
-                    self.channel.queue_bind(exchange=self.exchange_name, queue=queue_name, routing_key=rk)
-                
-                logger.info(f"Connected to RabbitMQ exchange {self.exchange_name} at {self.host}:{5672}")
+                logger.info(f"Connected to RabbitMQ at {self.host}:{AMQP_PORT} (queue={self.queue_name})")
                 break
             except pika.exceptions.AMQPConnectionError as e:
                 logger.warning(f"Attempt {attempt}: Could not connect: {e}")
@@ -136,18 +132,20 @@ class MessageMiddlewareExchange(MessageMiddleware):
                     time.sleep(DELAY)
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
-    
+                
+    def bind_to_exchange(self, exchange_name, exchange_type: str = "direct", routing_key: str = ""):
+        """Binding queue to a certain exchange with a given routing key"""
+        self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=True)
+        self.channel.queue_bind(exchange=exchange_name, queue=self.queue_name, routing_key=routing_key)    
 
-    def start_consuming(self, on_message_callback, queues=None):
+    def start_consuming(self, on_message_callback):
         try:
             self._consuming = True
-            queues_to_consume = queues or self.route_keys
-            for q in queues_to_consume:
-                self.channel.basic_consume(
-                    queue=q,
-                    on_message_callback=on_message_callback,
-                    auto_ack=False
-                )
+            self.channel.basic_consume(
+                queue=self.queue_name,
+                on_message_callback=on_message_callback,
+                auto_ack=False,
+            )
             self.channel.start_consuming()
         except pika.exceptions.AMQPConnectionError as e:
             raise MessageMiddlewareDisconnectedError(str(e))
@@ -159,21 +157,34 @@ class MessageMiddlewareExchange(MessageMiddleware):
             self.channel.stop_consuming()
             self._consuming = False
     
-    def send(self, message, exchange=None, route_key = None):
+    def send(self, message):
+        """publish to default exchange"""
         try:
-            exchange = exchange or self.exchange_name
-            routing_key = route_key or (self.route_keys[0] if self.route_keys else "")
             self.channel.basic_publish(
-                exchange=exchange,
-                routing_key=routing_key,
+                exchange="",
+                routing_key=self.queue_name,
                 body=message,
-                properties=pika.BasicProperties(delivery_mode=2), #TODO: Chequear bien este delivery mode
+                properties=pika.BasicProperties(delivery_mode=2),
             )
         except pika.exceptions.AMQPConnectionError as e:
             raise MessageMiddlewareDisconnectedError(str(e))
         except Exception as e:
             raise MessageMiddlewareMessageError(str(e))
-
+    
+    def send_to(self, exchange: str, routing_key: str, message):
+        """Publish to a specific exchange w/routing key - for topic exchange"""
+        try:
+            self.channel.basic_publish(
+                exchange=exchange,
+                routing_key=routing_key,
+                body=message,
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
+        except pika.exceptions.AMQPConnectionError as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
+        
     def close(self):
         try:
             if self.channel and self.channel.is_open:
@@ -186,9 +197,6 @@ class MessageMiddlewareExchange(MessageMiddleware):
 
     def delete(self):
         try:
-            for rk in self.route_keys:
-                queue_name = f"{self.exchange_name}_{rk}"
-                self.channel.queue_delete(queue=queue_name)
-            self.channel.exchange_delete(exchange=self.exchange_name)
+            self.channel.queue_delete(queue=self.queue_name)
         except Exception as e:
             raise MessageMiddlewareDeleteError(str(e))

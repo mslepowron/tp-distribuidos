@@ -16,8 +16,10 @@ services:
       - rabbitmq
     environment:
       - CONFIG_PATH=/config/config.ini
+      - STORAGE_DIR=/storage
     volumes:
       - ./app_controller/config/config.ini:/config/config.ini:ro
+      - ./app_controller/storage:/storage:ro
     networks:
       - coffee_analysis_net
   filter_year:
