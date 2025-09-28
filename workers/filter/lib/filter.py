@@ -10,12 +10,12 @@ logger = logging.getLogger("filter")
 
 
 class Filter:
-    def __init__(self, mw, result_mw, next_worker, filter_type='Year'):
-        self.next_worker = next_worker
+    def __init__(self, mw, result_mw, filter_type, input_rk, output_rk):
         self.type = filter_type
         self.mw = mw
         self.result_mw = result_mw
-        self.has_sent_any_result = False
+        self.input_rk = input_rk
+        self.output_rk = output_rk
     
     def start(self):
         try:
@@ -39,11 +39,11 @@ class Filter:
 
     def start_filter(self):
         if self.type == 'Amount':
-            self.mw.start_consuming(self.callback_filter_amount, queues=["filters_amount"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
+            self.mw.start_consuming(self.callback_filter_amount, queues=self.input_rk) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
         elif self.type == 'Year':
-            self.mw.start_consuming(self.callback_filter_year, queues=["filters_year"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
+            self.mw.start_consuming(self.callback_filter_year, queues=self.input_rk) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
         elif self.type == 'Hour':
-            self.mw.start_consuming(self.callback_filter_hour, queues=["filters_hour"])
+            self.mw.start_consuming(self.callback_filter_hour, queues=self.input_rk)
         else:
             logger.error(f"Non valid filter type: {self.type}")
 
@@ -130,14 +130,14 @@ class Filter:
                 schema_fields = RAW_SCHEMAS[schema_name]
                 csv_bytes = serialize_message(result_header, filtered_rows, schema_fields)
 
-                self.result_mw.send(csv_bytes, route_key=self.next_worker)
+                self.result_mw.send(csv_bytes, route_key=self.output_rk)
             except Exception as e:
                 logger.error(f"Error enviando resultado: {e}")
 
     def handle_EOF(self, body, header):
         if header.fields.get("message_type") == "EOF":
             logger.info("All messages recieved. Sending EOF...")
-            self.result_mw.send(body, route_key=self.next_worker)
+            self.result_mw.send(body, route_key=self.output_rk)
             logger.info("Mensaje EOF reenviado al siguiente paso")
             return True
         return False

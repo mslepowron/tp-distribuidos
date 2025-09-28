@@ -25,8 +25,13 @@ services:
       context: .
       dockerfile: workers/filter/Dockerfile
     environment:
-      - FILTER_TYPE=Year
-      - RESULT_QUEUE=filters_hour
+      - FILTER_TYPE=Year #esto puede no estar y usar el routing-key
+      - INPUT_EXCHANGE= input_file_ex
+      - INPUT_EXCHANGE_TYPE= direct
+      - INPUT_ROUTING_KEY=[filter_year]
+      - OUTPUT_EXCHANGE= filter_year
+      - OUTPUT_EXCHANGE_TYPE= topic
+      - OUTPUT_ROUTING_KEY=[transactions, trx_items]
     depends_on:
       - rabbitmq
     networks:
@@ -37,7 +42,12 @@ services:
       dockerfile: workers/filter/Dockerfile
     environment:
       - FILTER_TYPE=Hour
-      - RESULT_QUEUE=filters_amount
+      - INPUT_EXCHANGE= input_file_ex
+      - INPUT_EXCHANGE_TYPE= direct
+      - INPUT_ROUTING_KEY=[filter_year]
+      - OUTPUT_EXCHANGE= filter_year
+      - OUTPUT_EXCHANGE_TYPE= topic
+      - OUTPUT_ROUTING_KEY=[transactions, trx_items]
     depends_on:
       - rabbitmq
     networks:
