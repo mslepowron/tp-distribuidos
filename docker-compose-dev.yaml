@@ -14,6 +14,7 @@ services:
       dockerfile: app_controller/Dockerfile
     depends_on:
       - rabbitmq
+      - filter_year
     environment:
       - CONFIG_PATH=/config/config.ini
       - STORAGE_DIR=/storage
@@ -28,12 +29,10 @@ services:
       dockerfile: workers/filter/Dockerfile
     environment:
       - FILTER_TYPE=Year #esto puede no estar y usar el routing-key
-      - INPUT_EXCHANGE= input_file_ex
-      - INPUT_EXCHANGE_TYPE= direct
-      - INPUT_ROUTING_KEY=[filter_year]
-      - OUTPUT_EXCHANGE= filter_year
-      - OUTPUT_EXCHANGE_TYPE= topic
-      - OUTPUT_ROUTING_KEY=[transactions, trx_items]
+      - QUEUE_NAME=filter_year_q
+      - INPUT_BINDINGS=[["input_file_ex","direct","transactions"],["input_file_ex","direct","transaction_items"]]
+      - OUTPUT_EXCHANGE=filter_year_ex
+      - OUTPUT_RKS=["transactions","transaction_items"]
     depends_on:
       - rabbitmq
     networks:
@@ -44,12 +43,10 @@ services:
       dockerfile: workers/filter/Dockerfile
     environment:
       - FILTER_TYPE=Hour
-      - INPUT_EXCHANGE= input_file_ex
-      - INPUT_EXCHANGE_TYPE= direct
-      - INPUT_ROUTING_KEY=[filter_year]
-      - OUTPUT_EXCHANGE= filter_year
-      - OUTPUT_EXCHANGE_TYPE= topic
-      - OUTPUT_ROUTING_KEY=[transactions, trx_items]
+      - QUEUE_NAME=filter_hour_q
+      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
+      - OUTPUT_EXCHANGE=filter_hour_ex
+      - OUTPUT_RKS=[]
     depends_on:
       - rabbitmq
     networks:
@@ -62,7 +59,10 @@ services:
       - rabbitmq
     environment:
       - FILTER_TYPE=Amount
-      - RESULT_QUEUE=coffee_results
+      - QUEUE_NAME=filter_amount_q
+      - INPUT_BINDINGS=[["filter_hour_ex","fanout",""]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_amount_75_trx"]
     networks:
       - coffee_analysis_net
 

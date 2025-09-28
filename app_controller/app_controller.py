@@ -3,7 +3,9 @@ from uuid import uuid4
 import csv
 import sys
 import os
+import time
 from typing import Dict, List
+import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
@@ -51,9 +53,11 @@ class AppController:
             self.mw_input = MessageMiddlewareExchange(
                 host=self.host,
                 queue_name="app_controller_input",
-                bindings=[(self.input_exchange, "topic", rk) for rk in self.input_routing_keys]
+                #bindings=[(self.input_exchange, "direct", rk) for rk in self.input_routing_keys]
             ) #bindings = exchange name, tipo y las routing keys asociadas a donde va a mandar cosas.
 
+            self.mw_input.ensure_exchange(self.input_exchange, "direct")
+            
             #Exchange con binding a la cola de donde va a recibir los resultados de las queries desde diferentes
             #routing keys.
             self.result_mw = MessageMiddlewareExchange(
@@ -110,10 +114,31 @@ class AppController:
 
         return files_by_rk
     
+    def _wait_for_queues(self, queue_names, timeout=30):
+        """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                for q in queue_names:
+                    # passive=True: no crea la cola, solo falla si no existe
+                    self.mw_input.channel.queue_declare(queue=q, passive=True)
+                logger.info(f"Ready: all target queues exist: {queue_names}")
+                return True
+            except pika.exceptions.ChannelClosedByBroker:
+                # El broker cierra el canal si la cola no existe en modo passive - reabrimos y reintentamos
+                self.mw_input.channel = self.mw_input.connection.channel()
+                time.sleep(1)
+            except Exception:
+                time.sleep(1)
+        logger.warning(f"Timeout esperando colas {queue_names}; enviando igual")
+        return False
+    
     def run(self):
         self.connect_to_middleware()
         self._running = True
 
+        # time.sleep(10)
+        self._wait_for_queues(["filter_year_q"])
         files_by_rk = self._routing_key_by_files()
         try:
             for rk in ["transactions", "transaction_items", "menu_items", "users", "stores"]:
@@ -141,7 +166,7 @@ class AppController:
                 logger.info(f"[results:{rk}] len={len(body)} bytes")
 
                 # Elegir el schema por rk si difiere por query dejo hardocdeado de ej transactions.raw:
-                header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
+                header, rows = deserialize_message(body)
                 logger.info(f"Header: {header.as_dictionary()}")
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
@@ -190,7 +215,7 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
                 ("seq", str(uuid4())),
-                ("schema", "transactions.raw"),
+                ("schema", source),
                 ("source", source)
             ]
             header = Header(header_fields)
@@ -213,7 +238,7 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", "transactions.raw"),
                 ("seq", str(uuid4())),
-                ("schema", "transactions.raw"),
+                ("schema", source),
                 ("source", source)
             ]
             header = Header(header_fields)

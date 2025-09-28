@@ -40,6 +40,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
                 self.channel = self.connection.channel()
                 self.channel.queue_declare(queue=self.queue_name, durable=True)
                 logger.info(f"Connected to RabbitMQ at {self.host}:{5672}")
+                logger.info(f"Connected to queue {self.queue_name}; channel:{self.channel}")
                 break
             except pika.exceptions.AMQPConnectionError as e:
                 logger.warning(f"Attempt {attempt}: Could not connect: {e}")
@@ -119,6 +120,11 @@ class MessageMiddlewareExchange(MessageMiddleware):
                 self.channel = self.connection.channel()
                 self.channel.queue_declare(queue=self.queue_name, durable=True)
 
+                def _on_return(ch, method, properties, body):
+                    logger.error(f"UNROUTABLE: exchange={method.exchange} rk={method.routing_key} len={len(body)}")
+
+                self.channel.add_on_return_callback(_on_return)
+                
                 if bindings:
                     for ex_name, ex_type, r_key in bindings:
                         self.bind_to_exchange(ex_name, ex_type, r_key)
@@ -132,7 +138,13 @@ class MessageMiddlewareExchange(MessageMiddleware):
                     time.sleep(DELAY)
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
-                
+
+    #asegurarse de ya tener el exchange
+    def ensure_exchange(self, exchange_name: str, exchange_type: str = "direct", durable: bool = True):
+        self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=durable)
+        logger.info(f"ensure_exchange: name={exchange_name} type={exchange_type} durable={durable}")            
+    
+    
     def bind_to_exchange(self, exchange_name, exchange_type: str = "direct", routing_key: str = ""):
         """Binding queue to a certain exchange with a given routing key"""
         self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=True)
@@ -172,12 +184,13 @@ class MessageMiddlewareExchange(MessageMiddleware):
             raise MessageMiddlewareMessageError(str(e))
     
     def send_to(self, exchange: str, routing_key: str, message):
-        """Publish to a specific exchange w/routing key - for topic exchange"""
+        """Publish to a specific exchange w/routing key - for direct exchange"""
         try:
             self.channel.basic_publish(
                 exchange=exchange,
                 routing_key=routing_key,
                 body=message,
+                mandatory=True, #Para ver sihay bindings o no
                 properties=pika.BasicProperties(delivery_mode=2),
             )
         except pika.exceptions.AMQPConnectionError as e:

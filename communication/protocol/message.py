@@ -26,8 +26,8 @@ HEADER_KEYS = (
     "stage", # etapa de la consulta (ej "filter", "map", etc)
     "part", # nombre del archivo
     "seq", # numero de secuencia del batch
-    "schema", 
-    "source" # worker
+    "schema", #que archivo es
+    "source" # de que archivo viene el mensaje
 )
 
 MESSAGE_TYPES = {"DATA", "EOF"}
