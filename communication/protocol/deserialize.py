@@ -32,39 +32,72 @@ def _resolve_raw_schema_name(header: Header) -> str:
         raise HeaderError("Header sin 'schema' ni 'source' para resolver el esquema.")
     return s.strip()
 
-def deserialize_message(message_bytes: bytes) -> Tuple[Header, List[Dict[str, str]]]:
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("deserialize")
+# def deserialize_message(message_bytes: bytes) -> Tuple[Header, List[Dict[str, str]]]:
+#     logging.basicConfig(level=logging.INFO)
+#     logger = logging.getLogger("deserialize")
     
+#     if b"\n===\n" not in message_bytes:
+#         try:
+#             header = Header.decode(message_bytes)
+#             return header, []
+#         except Exception:
+#             raise ProtocolError("Formato de mensaje inválido: no se encontró separador '\\n===\\n' ni se pudo decodificar el header.")
+
+#     try:
+#         header_bytes, payload_bytes = message_bytes.split(b"\n===\n", 1)
+#     except Exception:
+#         raise ProtocolError("Formato de mensaje inválido: separador '\\n===\\n' no encontrado")
+
+#     header = Header.decode(header_bytes)
+
+#     schema_key = _resolve_raw_schema_name(header)  # ej: "transactions.raw"
+#     try:
+#         fieldnames = SCHEMAS[schema_key]
+#     except KeyError:
+#         raise PayloadError(f"Schema '{schema_key}' no encontrado en SCHEMAS")
+
+#     try:
+#         if not payload_bytes.strip():
+#             return header, []
+
+#         byte_stream = io.BytesIO(payload_bytes)
+#         text_reader = io.TextIOWrapper(byte_stream, encoding="utf-8", newline="")
+#         reader = csv.DictReader(text_reader, fieldnames=fieldnames)
+#         rows = [row for row in reader if any((v or "") != "" for v in row.values())]
+#     except Exception as e:
+#         raise PayloadError(f"Error deserializando payload: {e}")
+
+#     return header, rows
+
+def deserialize_message(message_bytes: bytes) -> Tuple[Header, List[Dict[str, str]]]:
+    """
+    Deserializa un mensaje en bytes a un Header y lista de filas según el schema del header.
+    """
     if b"\n===\n" not in message_bytes:
-        try:
-            header = Header.decode(message_bytes)
-            return header, []
-        except Exception:
-            raise ProtocolError("Formato de mensaje inválido: no se encontró separador '\\n===\\n' ni se pudo decodificar el header.")
+        header = Header.decode(message_bytes)
+        return header, []
 
-    try:
-        header_bytes, payload_bytes = message_bytes.split(b"\n===\n", 1)
-    except Exception:
-        raise ProtocolError("Formato de mensaje inválido: separador '\\n===\\n' no encontrado")
-
+    header_bytes, payload_bytes = message_bytes.split(b"\n===\n", 1)
     header = Header.decode(header_bytes)
 
-    schema_key = _resolve_raw_schema_name(header)  # ej: "transactions.raw"
-    try:
-        fieldnames = SCHEMAS[schema_key]
-    except KeyError:
-        raise PayloadError(f"Schema '{schema_key}' no encontrado en SCHEMAS")
+    if not payload_bytes.strip():
+        return header, []
 
-    try:
-        if not payload_bytes.strip():
-            return header, []
+    #schema del header
+    schema_str = header.fields.get("schema", "")
+    if not schema_str:
+        raise PayloadError(f"No se encontró 'schema' en el header: {header.fields}")
+    fieldnames = schema_str.split(",")
 
-        byte_stream = io.BytesIO(payload_bytes)
-        text_reader = io.TextIOWrapper(byte_stream, encoding="utf-8", newline="")
-        reader = csv.DictReader(text_reader, fieldnames=fieldnames)
+    byte_stream = io.BytesIO(payload_bytes)
+    text_reader = io.TextIOWrapper(byte_stream, encoding="utf-8", newline="")
+    reader = csv.DictReader(text_reader, fieldnames=fieldnames)
+
+    # Si el CSV tiene header, se puede saltar la primera fila
+    first_row = next(reader, None)
+    if first_row and all((v or "") != "" for v in first_row.values()):
+        rows = [first_row] + [row for row in reader if any((v or "") != "" for v in row.values())]
+    else:
         rows = [row for row in reader if any((v or "") != "" for v in row.values())]
-    except Exception as e:
-        raise PayloadError(f"Error deserializando payload: {e}")
 
     return header, rows

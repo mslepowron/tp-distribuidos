@@ -48,19 +48,19 @@ class Filter:
         Funciona tanto para .raw como para .clean porque usa SCHEMAS.
         """
         schema_name = header.fields["schema"]
-        if schema_name not in CLEAN_SCHEMAS:
-            raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
-        schema_fields = CLEAN_SCHEMAS[schema_name]
-        return serialize_message(header, rows, schema_fields)
+        # if schema_name not in CLEAN_SCHEMAS:
+        #     raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
+        # schema_fields = CLEAN_SCHEMAS[schema_name]
+        return serialize_message(header, rows, header.fields["schema"])
     
-    def _send_rows(self, header, rows, routing_keys=None):
+    def _send_rows(self, header, rows, routing_keys):
         if not rows:
             return
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": self.__class__.__name__,
+                "stage": "FilterYear",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema": header.fields["schema"],
@@ -76,8 +76,17 @@ class Filter:
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
-    def _forward_eof(self, header, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None):
         try:
+            out_header = Header({
+                "message_type": header.fields["message_type"],
+                "query_id": header.fields["query_id"],
+                "stage": stage,
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": header.fields["schema"],
+                "source": header.fields["source"],
+            })
             eof_payload = self._serialize_rows(header, [])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
@@ -102,8 +111,16 @@ class YearFilter(Filter):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
+                source = header.fields.get("source", "")
+                if source.startswith("transactions"):
                 # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, routing_keys=["transactions", "transaction_items"])
+                    routing_keys=["transactions"]
+                    self._forward_eof(header, "FilterYear", routing_keys)
+                    logger.info(f"EOF for: {source} sent to routing key: {routing_keys}")
+                else:
+                    routing_keys=["transaction_items"]
+                    self._forward_eof(header, "FilterYear", routing_keys)
+                    logger.info(f"EOF for: {source} sent to routing key: {routing_keys}")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
             filtered = []
@@ -115,7 +132,7 @@ class YearFilter(Filter):
 
             # Determino RK de salida segun cual es el archivo que me llego
             source = header.fields.get("source", "")
-            if "transaction_items" in source or method.routing_key.startswith("transaction_items"):
+            if source.startswith("transaction_items") or method.routing_key.startswith("transaction_items"):
                 out_rk = ["transaction_items"]
             else:
                 out_rk = ["transactions"]
@@ -136,7 +153,7 @@ class HourFilter(Filter):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=[])  # fanout
+                self._forward_eof(header, "FilterHour",routing_keys=[])  # fanout
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
@@ -161,7 +178,7 @@ class AmountFilter(Filter):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=["q_amount_75_trx"])
+                self._forward_eof(header, "FilterAmount", routing_keys=["q_amount_75_trx"])
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 

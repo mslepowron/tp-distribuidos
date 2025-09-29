@@ -9,7 +9,7 @@ import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
-from communication.protocol.schemas import CLEAN_SCHEMAS
+from communication.protocol.schemas import CLEAN_SCHEMAS, SCHEMA_EOF
 from communication.protocol.deserialize import deserialize_message
 
 from pathlib import Path
@@ -30,7 +30,7 @@ SCHEMA_BY_RK = {
     "menu_items": "menu_items.clean",
     "users": "users.clean",
     "stores": "stores.clean",
-} #TODO esto desp cambiarlo a clean
+} #TODO esto desp sacarle el clean? No me convence xq van a ir cambiando los schemas.
 
 class AppController:
     def __init__(self, host, input_exchange, input_routing_keys,
@@ -238,12 +238,12 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", "transactions.raw"),
                 ("seq", str(uuid4())),
-                ("schema", source),
+                ("schema", "EOF"),
                 ("source", source)
             ]
             header = Header(header_fields)
             # Enviamos un mensaje vacío, el filtro lo va a interpretar
-            message_bytes = serialize_message(header, [], CLEAN_SCHEMAS[source])
+            message_bytes = serialize_message(header, [], SCHEMA_EOF)
             route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
             self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
             logger.info(f"EOF → {self.input_exchange}:{routing_key}")

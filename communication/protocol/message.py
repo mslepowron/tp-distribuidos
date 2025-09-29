@@ -15,7 +15,7 @@ class PayloadError(ProtocolError):
 VALID_QUERY_IDS = {
     "q_amount_75_tx",
     "q_month_top_qty",
-    "q_month_top_review",
+    "q_month_top_rev",
     "q_semester_tpv",
     "q_top3_birthdays"
 }

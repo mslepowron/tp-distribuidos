@@ -38,13 +38,17 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
         "store_id", "store_name"
     ],
 
-    "menu_clean": [
+    "menu_items.clean": [
         "item_id", "item_name"
     ],
 
     "users.clean": [
         "user_id", "birthdate"
     ],
+}
+
+SCHEMA_EOF: Dict[str, List[str]] = {
+    "EOF": []
 }
 
 #All schemas
@@ -54,6 +58,7 @@ AGGREGATED_SCHEMAS = {
     "user_purchases.aggregated": ["user_id", "store_id", "total_purchased"],
     "tpv.aggregated": ["store_name", "year_semester", "tpv"],
     "quantity.aggregated": ["year_month", "item_name", "selling_qty"],
-    "profit.aggregated": ["year_month", "item_name", "profit_sum"]
+    "profit.aggregated": ["year_month", "item_name", "profit_sum"],
+    "joined.menu_items": ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
 }
 SCHEMAS.update(AGGREGATED_SCHEMAS)

@@ -13,7 +13,7 @@ PREFIX_MAPPING = {
     "transactions": ("transactions.clean", "transactions.raw"),
     "transaction_items": ("transaction_items.clean", "transaction_items.raw"),
     "stores": ("stores.clean", "stores.raw"),
-    "menu_items": ("menu_clean", "menu.raw"),
+    "menu_items": ("menu_items.clean", "menu.raw"),
     "users": ("users.clean", "users.raw"),
 }
 

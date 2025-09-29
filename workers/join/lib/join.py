@@ -1,12 +1,13 @@
 import logging
 import csv
 import os
+import ast
 from pathlib import Path
 from typing import Dict, List, Tuple
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
-from communication.protocol.schemas import CLEAN_SCHEMAS
+from communication.protocol.schemas import CLEAN_SCHEMAS, AGGREGATED_SCHEMAS
 
 logger = logging.getLogger("join")
 
@@ -17,22 +18,34 @@ MENU_OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "s
 class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
     OUTPUT_FIELDS: List[str] = []
-    OUTPUT_JOINED_FILE: str = None  #archivo donde se guarda el resultado del join
+    OUTPUT_FILE_BASENAME: str = None  #archivo donde se guarda el resultado del join
 
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
         self.mw = mw_in
         self.result_mw = mw_out
         self.output_exchange = output_exchange
         self.input_bindings = input_bindings
-        storage_path = storage
+        
+        self.source_file_index = None  # dict con  un _id y un nombre (ej item_id, item_name o store_id, store_name)
+        self.source_file_closed = False
         eof_count = 0
         #define un archivo para almacenar en c/archivo un tipo de stream de datos que necesita
         self.files: Dict[str, Path] = {s: storage / f"{s}.csv" for s in self.REQUIRED_STREAMS}
-        self.join_out_file: Path = storage / self._output_filename()
+
+        # chequea que existan los archivos vacios
+        for f in self.files.values():
+            if not f.exists():
+                f.touch()
+
+        self.join_out_file: Path = storage / self.OUTPUT_FILE_BASENAME
         if isinstance(output_rks, str):
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
+
+        for f in self.files.values():
+            if not f.exists():
+                f.touch()
 
     def start(self):
         try:
@@ -62,22 +75,23 @@ class Join:
         Funciona tanto para .raw como para .clean porque usa SCHEMAS.
         """
         schema_name = header.fields["schema"]
-        if schema_name not in CLEAN_SCHEMAS:
-            raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
-        schema_fields = CLEAN_SCHEMAS[schema_name]
-        return serialize_message(header, rows, schema_fields)
+        # if schema_name not in CLEAN_SCHEMAS:
+        #     raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
+        # schema_fields = CLEAN_SCHEMAS[schema_name]
+        #return serialize_message(header, rows, schema_fields)
+        return serialize_message(header, rows, header.fields["schema"])
     
-    def _send_rows(self, header, rows, routing_keys=None):
+    def _send_rows(self, header, rows, schema, routing_keys=None):
         if not rows:
             return
         try:
             out_header = Header({
-                "message_type": header.fields["message_type"],
+                "message_type": "DATA",
                 "query_id": header.fields["query_id"],
-                "stage": self.__class__.__name__,
+                "stage": "JoinMenu",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
-                "schema": header.fields["schema"],
+                "schema": ",".join(schema),
                 "source": header.fields["source"],
             })
             payload = self._serialize_rows(out_header, rows)
@@ -87,12 +101,26 @@ class Join:
             else:
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
+                    logger.info(f"Enviado batch de {len(rows)} filas a {self.output_exchange} con rk '{rk}'")
+                    logger.info(f"Header: {out_header.fields}")
+                    logger.info(f"Rows: {rows}")
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
+            logger.error(f"header: {header.fields}")
+            logger.error(f"rows: {rows}")
     
-    def _forward_eof(self, header, routing_keys=None):
+    def _forward_eof(self, header, schema, routing_keys=None):
         try:
-            eof_payload = self._serialize_rows(header, [])
+            out_header = Header({
+                "message_type": "EOF",
+                "query_id": header.fields["query_id"],
+                "stage": "JoinMenu",
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": ",".join(schema),
+                "source": header.fields["source"],
+            })
+            eof_payload = self._serialize_rows(out_header, [])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
                 #logger.info(f"ENTRA AL FANOUT")
@@ -105,10 +133,7 @@ class Join:
             logger.error(f"Error reenviando EOF: {e}")
 
     def _append_rows(self, file_path: Path, rows: List[Dict[str, str]]):
-        """
-        Anexa filas al csv. Un csv por tipo de stream de datos
-          Si el archivo no existe/es vacío, escribe header con las keys que nos llegan en el schema del header.
-        """
+        """ Persiste un batch de filas en CSV """
         if not rows:
             return
         file_exists = file_path.exists() and file_path.stat().st_size > 0
@@ -120,46 +145,11 @@ class Join:
             writer.writerows(rows)
 
     def _read_rows(self, file_path: Path) -> List[Dict[str, str]]:
+        """Carga TODO el CSV (no usar para transacciones grandes, solo para menu)"""
         if not file_path.exists() or file_path.stat().st_size == 0:
             return []
         with file_path.open("r", newline="", encoding="utf-8") as f:
             return list(csv.DictReader(f))
-    
-    def _output_basename(join_class) -> str:
-        return join_class.OUTPUT_FILE_BASENAME
-    
-    def _stream_from_source(self, header: Header) -> str:
-        """
-        Toma el header y se fija que tipo de stream de datos es
-        """
-        src = (header.fields.get("source") or "").lower()
-        if "transaction_items" in src:
-            return "transaction_items"
-        if "menu" in src:  #cubre menu y trx items, pero otros joins usan otros cosos
-            return "menu"
-        return ""
-    
-    def _on_all_eofs_then_join(self, last_header: Header):
-        """
-        Cuando EOF de todos los streams requeridos hace el join y manda la 
-        salida al output exchange
-        """
-        if self.eof_count >= len(self.REQUIRED_STREAMS):
-            try:
-                out_rows = self._do_join()
-                # persiste el join en storage
-                with self.join_out_file.open("w", newline="", encoding="utf-8") as f:
-                    writer = csv.DictWriter(f, fieldnames=Join.OUTPUT_FIELDS)
-                    writer.writeheader()
-                    writer.writerows(out_rows)
-                # TODO: Deberia levantar el storage de a batches/mandar lo joienado de a mabatches
-                self._send_rows(last_header, out_rows)
-                self._send_eof(last_header)
-                logger.info(f"{self.__class__.__name__}: join emitido ({len(out_rows)} filas) + EOF")
-            except Exception as e:
-                logger.error(f"{self.__class__.__name__} join error: {e}")
-            finally:
-                self.eof_count = 0
 
 # ----------------- SUBCLASES -----------------
 
@@ -170,84 +160,111 @@ class MenuJoin(Join):
 
     def callback(self, ch, method, properties, body):
         try:
-            header, rows = deserialize_message(body)  # seguimos usando tu deserializador
-            stream = self._stream_from_source(header)
-            if not stream:
-                logger.warning(f"Stream desconocido. source={header.fields.get('source')} rk={getattr(method,'routing_key','')}")
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+            header, rows = deserialize_message(body)
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+
+            # EOF
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                if source.startswith("menu_items"):
+                    self.source_file_index = self._build_menu_index()
+                    self.source_file_closed = True
+
+                    for batch in self._read_batches(self.files["transaction_items"], 1000): #TODO: Esta hardcodeado el batch
+                        joined = self._join_batch(batch)
+                        self._send_rows(header, joined, self.OUTPUT_FIELDS)
+
+                elif source.startswith("transaction_items"):
+                    if self.source_file_closed:
+                        self._forward_eof(header, self.OUTPUT_FIELDS,routing_keys=self.output_rk)
+
+                if ch is not None and hasattr(method, "delivery_tag"):
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            if header.fields.get("message_type") == "EOF":
-                self.eof_count += 1
-                logger.info(f"EOF recibido de '{stream}'")
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                # si ambos EOF => join y emitir
-                self._on_all_eofs_then_join(header)
-                return
+            # DATA
+            if source.startswith("menu_items"):
+                self._append_rows(self.files["menu_items"], rows)
 
-            # DATA: persistimos al CSV correspondiente, sin validar schema
-            self._append_rows(self.files[stream], rows)
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            elif source.startswith("transaction_items"):
+                if not getattr(self, "source_file_closed", False):
+                    self._append_rows(self.files["transaction_items"], rows)
+                else:
+                    joined = self._join_batch(rows)
+                    self._send_rows(header, joined, self.OUTPUT_FIELDS)
+
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"YearFilter error: {e}")
-    
-    #TODO: Creo que esta levantando todo en memoria.
-    def _do_join(self) -> List[Dict[str, str]]:
-        # lee los csv del storage
-        menu_rows = self._read_rows(self.files["menu"])
-        trx_rows  = self._read_rows(self.files["transaction_items"])
+            logger.error(f"MenuJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
-        if not menu_rows or not trx_rows:
-            logger.warning("No hay datos suficientes para join (menu o transaction_items vacío).")
-            return []
-    
-        def pick_item_id(row: Dict[str, str]) -> str:
-                if "item_id" in row and row["item_id"] != "":
-                    return row["item_id"]
-                if "menu_item_id" in row and row["menu_item_id"] != "":
-                    return row["menu_item_id"]
-                return ""
 
-        def pick_item_id(row: Dict[str, str]) -> str:
-                if "item_id" in row and row["item_id"] != "":
-                    return row["item_id"]
-                if "menu_item_id" in row and row["menu_item_id"] != "":
-                    return row["menu_item_id"]
-                return ""
 
-        # construye el indice de nombres: item_id -> item_name
-        def pick_item_name(row: Dict[str, str]) -> str:
-            if "item_name" in row and row["item_name"] != "":
-                return row["item_name"]
-            if "name" in row and row["name"] != "":
-                return row["name"]
-            return ""
+    def _build_menu_index(self) -> Dict[str, str]:
+        """ Construye el índice de item_id -> item_name una vez que tengo todo el menú """
+        menu_rows = self._read_rows(self.files["menu_items"])
 
-        name_by_item: Dict[str, str] = {}
+        def pick_item_id(row):
+            return row.get("item_id") or row.get("menu_item_id") or ""
+
+        def pick_item_name(row):
+            raw_name = row.get("item_name") or row.get("name") or ""
+            # Si es un string que parece lista, extraigo el primer elemento
+            try:
+                parsed = ast.literal_eval(raw_name)
+                if isinstance(parsed, list) and parsed:
+                    return parsed[0]
+            except (ValueError, SyntaxError):
+                pass
+            return raw_name
+
+        index = {}
         for m in menu_rows:
             mid = pick_item_id(m)
-            if not mid:
-                continue
             nm = pick_item_name(m)
-            if nm:
-                name_by_item[mid] = nm
+            if mid and nm:
+                index[mid] = nm
+        logger.info(f"Menu index construido con {len(index)} items")
+        return index
 
-        # mapear a OUTPUT_FIELDS
-        out: List[Dict[str, str]] = []
+    def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menú indexado """
+        if not self.source_file_index:
+            return []
+        out = []
         for t in trx_rows:
-            item_id = pick_item_id(t)
+            item_id = t.get("item_id") or t.get("menu_item_id") or ""
             if not item_id:
                 continue
             out.append({
                 "transaction_id": t.get("transaction_id", t.get("trx_id", "")),
-                "created_at":     t.get("created_at", ""),
-                "item_id":        item_id,
-                "item_name":      name_by_item.get(item_id, ""),
-                "subtotal":       t.get("subtotal", t.get("amount", "")),
+                "created_at": t.get("created_at", ""),
+                "item_id": item_id,
+                "item_name": self.source_file_index.get(item_id, ""),
+                "subtotal": t.get("subtotal", t.get("amount", "")),
             })
-
         return out
+
+    def _read_batches(self, file_path: Path, batch_size: int):
+        """ Itera el CSV en batches para no cargar todo en memoria """
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            return
+        with file_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
     
 
 
