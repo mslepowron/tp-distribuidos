@@ -2,12 +2,13 @@ import logging
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
-from communication.protocol.schemas import CLEAN_SCHEMAS
+from communication.protocol.schemas import RAW_SCHEMAS
+from datetime import datetime
 
-logger = logging.getLogger("filter")
+logger = logging.getLogger("map")
 
 
-class Filter:
+class Map:
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings):
         self.mw = mw_in
         self.result_mw = mw_out
@@ -21,7 +22,7 @@ class Filter:
     def start(self):
         try:
             logger.info("Waiting for messages...")
-            self.start_filter()
+            self.start_map()
         except KeyboardInterrupt:
             logger.info("Shutting down consumer...")
             self.mw.stop_consuming()
@@ -37,10 +38,8 @@ class Filter:
         except Exception as e:
             logger.warning(f"No se pudo cerrar correctamente la conexion: {e}")
 
-    def start_filter(self):
-        # """Método abstracto, lo redefine cada hijo."""
+    def start_map(self):
         raise NotImplementedError
-        # self.mw.start_consuming(self.callback)
 
     def _serialize_rows(self, header, rows):
         """
@@ -48,9 +47,9 @@ class Filter:
         Funciona tanto para .raw como para .clean porque usa SCHEMAS.
         """
         schema_name = header.fields["schema"]
-        if schema_name not in CLEAN_SCHEMAS:
-            raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
-        schema_fields = CLEAN_SCHEMAS[schema_name]
+        if schema_name not in RAW_SCHEMAS:
+            raise ValueError(f"Schema '{schema_name}' no encontrado en RAW_SCHEMAS (header={header.fields})")
+        schema_fields = RAW_SCHEMAS[schema_name]
         return serialize_message(header, rows, schema_fields)
     
     def _send_rows(self, header, rows, routing_keys=None):
@@ -66,13 +65,17 @@ class Filter:
                 "schema": header.fields["schema"],
                 "source": header.fields["source"],
             })
+
             payload = self._serialize_rows(out_header, rows)
+
             rks = self.output_rk if routing_keys is None else routing_keys
+
             if not rks:  #caso fanout; aca nos aplica para el hours
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
+
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
@@ -89,13 +92,13 @@ class Filter:
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
+        
 
 # ----------------- SUBCLASES -----------------
 
-class YearFilter(Filter):
+class MapYearMonth(Map):
     def start_filter(self):
-        self.mw.start_consuming(self.callback) #, queues=self.input_bindings)
-        # self.mw.start_consuming(self.callback , queues="filter_year_q")
+        self.mw.start_consuming(self.callback)
 
     def callback(self, ch, method, properties, body):
         try:
@@ -103,77 +106,59 @@ class YearFilter(Filter):
 
             if header.fields.get("message_type") == "EOF":
                 # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, routing_keys=["transactions", "transaction_items"])
+                self._forward_eof(header, routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
-            filtered = []
+
+            mapped = []
 
             for row in rows:
-                year = int(row["created_at"].split("-")[0])
-                if year in (2024, 2025):
-                    filtered.append(row)
+                try:
+                    date_part = row["created_at"].split(" ")[0]   # 2024-10-01
+                    year_month = "-".join(date_part.split("-")[:2])  # [2024,10] -> 2024-10
 
-            # Determino RK de salida segun cual es el archivo que me llego
-            source = header.fields.get("source", "")
-            if "transaction_items" in source or method.routing_key.startswith("transaction_items"):
-                out_rk = ["transaction_items"]
-            else:
-                out_rk = ["transactions"]
+                    row["year_month_created_at"] = year_month
+                    mapped.append(row)
+                except Exception as e:
+                    logger.warning(f"No se pudo mapear fila {row}: {e}")
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            self._send_rows(header, filtered, routing_keys=out_rk)
+            self._send_rows(header, mapped, routing_keys=self.output_rk)
 
         except Exception as e:
-            logger.error(f"YearFilter error: {e}")
+            logger.error(f"{self.__class__.__name__} error: {e}")
 
 
-class HourFilter(Filter):
+class MapYearHalf(Map):
     def start_filter(self):
-        self.mw.start_consuming(self.callback) #, queues=self.input_bindings)
+        self.mw.start_consuming(self.callback)
 
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=[])  # fanout
+                # Propago EOF a ambas RKs para completar el “tipo”
+                self._forward_eof(header, routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            filtered = []
-            for row in rows:
-                hour = int(row["created_at"].split(" ")[1].split(":")[0])
-                if 6 <= hour < 23:
-                    filtered.append(row)
+            mapped = []
 
-            self._send_rows(header, filtered, routing_keys=[])  # fanout
+            for row in rows:
+                try:
+                    date_part = row["created_at"].split(" ")[0]  
+                    year, month, _ = date_part.split("-")        # "2024", "10", "01"
+                    half = "H1" if int(month) <= 6 else "H2"
+
+                    row["year_half_created_at"] = f"{year}-{half}"
+                    mapped.append(row)
+                except Exception as e:
+                    logger.warning(f"No se pudo mapear fila {row}: {e}")
+
             ch.basic_ack(delivery_tag=method.delivery_tag)
+            self._send_rows(header, mapped, routing_keys=self.output_rk)
 
         except Exception as e:
-            logger.error(f"HourFilter error: {e}")
-
-class AmountFilter(Filter):
-    def start_filter(self):
-        self.mw.start_consuming(self.callback) #, queues=self.input_bindings)
-
-    def callback(self, ch, method, properties, body):
-        try:
-            header, rows = deserialize_message(body)
-
-            if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=["q_amount_75_trx"])
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
-
-            filtered = []
-            for row in rows:
-                final_amount = float(row.get("final_amount") or 0.0)
-                if final_amount >= 75.0:
-                    filtered.append(row)
-
-            self._send_rows(header, filtered, routing_keys=["q_amount_75_trx"])
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        except Exception as e:
-            logger.error(f"AmountFilter error: {e}")
+            logger.error(f"{self.__class__.__name__} error: {e}")
 

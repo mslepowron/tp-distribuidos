@@ -11,4 +11,4 @@ class FilterFactory:
         elif filter_type == "Amount":
             return AmountFilter(mw_in, mw_out, output_exchange, output_rks, input_bindings)
         else:
-            return Filter(mw_in, mw_out, output_exchange, output_rks, input_bindings)
+            raise ValueError(f"Invalid filter type: {filter_type}")

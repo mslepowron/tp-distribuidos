@@ -1,13 +1,13 @@
 import json
 import logging
 import os
-from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-# from lib.filter import YearFilter, HourFilter, AmountFilter
-from lib.filterFactory import FilterFactory
+from pathlib import Path
+from middleware.rabbitmq.mom import MessageMiddlewareExchange
+from lib.joinFactory import JoinFactory
 
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("filter-main")
+logger = logging.getLogger("join-main")
 
 def parse_json_env(name, default=None):
     raw = os.getenv(name)
@@ -21,8 +21,8 @@ def parse_json_env(name, default=None):
 
 def main():
     try:
-        filter_type = os.getenv("FILTER_TYPE")
-        queue_name = os.getenv("QUEUE_NAME", f"{filter_type.lower()}_q")
+        join_type = os.getenv("JOIN_TYPE")
+        queue_name = os.getenv("QUEUE_NAME", f"{join_type.lower()}_q")
 
         input_bindings  = parse_json_env("INPUT_BINDINGS", [])
         output_exchange = os.getenv("OUTPUT_EXCHANGE", "")
@@ -39,12 +39,14 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        f = FilterFactory.create(filter_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
+        storage = Path(os.getenv("STORAGE_DIR", "storage"))
 
-        f.start()
+        j = JoinFactory.create(join_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
+
+        j.start()
 
     except Exception as e:
-        logger.error(f"Fallo al inicializar filter: {e}")
+        logger.error(f"Failed to initialize join: {e}")
 
 if __name__ == "__main__":
     main()

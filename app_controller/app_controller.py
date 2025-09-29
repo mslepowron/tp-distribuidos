@@ -9,7 +9,7 @@ import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
-from communication.protocol.schemas import RAW_SCHEMAS
+from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
 
 from pathlib import Path
@@ -25,11 +25,11 @@ STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
 BATCH_SIZE = 5 #TODO> Varialbe de entorno
 
 SCHEMA_BY_RK = {
-    "transactions": "transactions.raw",
-    "transaction_items": "transaction_items.raw",
-    "menu_items": "menu_items.raw",
-    "users": "users.raw",
-    "stores": "stores.raw",
+    "transactions": "transactions.clean",
+    "transaction_items": "transaction_items.clean",
+    "menu_items": "menu_items.clean",
+    "users": "users.clean",
+    "stores": "stores.clean",
 } #TODO esto desp cambiarlo a clean
 
 class AppController:
@@ -220,7 +220,7 @@ class AppController:
             ]
             header = Header(header_fields)
 
-            message_bytes = serialize_message(header, batch, RAW_SCHEMAS[source])
+            message_bytes = serialize_message(header, batch, CLEAN_SCHEMAS[source])
             route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
             self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
 
@@ -243,7 +243,7 @@ class AppController:
             ]
             header = Header(header_fields)
             # Enviamos un mensaje vacío, el filtro lo va a interpretar
-            message_bytes = serialize_message(header, [], RAW_SCHEMAS[source])
+            message_bytes = serialize_message(header, [], CLEAN_SCHEMAS[source])
             route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
             self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
             logger.info(f"EOF → {self.input_exchange}:{routing_key}")

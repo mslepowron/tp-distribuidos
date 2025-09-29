@@ -49,3 +49,11 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
 
 #All schemas
 SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS}
+
+AGGREGATED_SCHEMAS = {
+    "user_purchases.aggregated": ["user_id", "store_id", "total_purchased"],
+    "tpv.aggregated": ["store_name", "year_semester", "tpv"],
+    "quantity.aggregated": ["year_month", "item_name", "selling_qty"],
+    "profit.aggregated": ["year_month", "item_name", "profit_sum"]
+}
+SCHEMAS.update(AGGREGATED_SCHEMAS)
