@@ -41,53 +41,60 @@ class Map:
     def start_map(self):
         raise NotImplementedError
 
-    def _serialize_rows(self, header, rows):
-        """
-        Serializa las filas usando el schema que venga en el header.
-        Funciona tanto para .raw como para .clean porque usa SCHEMAS.
-        """
-        schema_name = header.fields["schema"]
-        if schema_name not in RAW_SCHEMAS:
-            raise ValueError(f"Schema '{schema_name}' no encontrado en RAW_SCHEMAS (header={header.fields})")
-        schema_fields = RAW_SCHEMAS[schema_name]
-        return serialize_message(header, rows, schema_fields)
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"]
+            raw_fieldnames = schema.strip()[1:-1]
+
+            # dividir por coma
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
     
-    def _send_rows(self, header, rows, routing_keys=None):
+    def _send_rows(self, header, rows, routing_keys):
         if not rows:
             return
         try:
+            schema = self.define_schema(header)
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": self.__class__.__name__,
+                "stage": "Map",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
-                "schema": header.fields["schema"],
+                "schema": schema,
                 "source": header.fields["source"],
             })
-
-            payload = self._serialize_rows(out_header, rows)
-
+            payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
-
             if not rks:  #caso fanout; aca nos aplica para el hours
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
-
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
     def _forward_eof(self, header, routing_keys=None):
         try:
-            eof_payload = self._serialize_rows(header, [])
+            out_header = Header({
+                    "message_type": header.fields["message_type"],
+                    "query_id": header.fields["query_id"],
+                    "stage": stage,
+                    "part": header.fields["part"],
+                    "seq": header.fields["seq"],
+                    "schema": header.fields["schema"],
+                    "source": header.fields["source"],
+                })
+            eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
-                logger.info(f"ENTRA AL FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
-                logger.info(f"ENTRA AL ROUT CON KEY")
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
@@ -99,6 +106,23 @@ class Map:
 class MapYearMonth(Map):
     def start_filter(self):
         self.mw.start_consuming(self.callback)
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            if header.fields["source"].startswith("transactions"): 
+                fieldnames.remove("created_at")
+            # elsif:
+           
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
     def callback(self, ch, method, properties, body):
         try:

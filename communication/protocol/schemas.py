@@ -45,17 +45,7 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
     "users.clean": [
         "user_id", "birthdate"
     ],
-    "EOF": []
 }
 
 #All schemas
 SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS,}
-
-AGGREGATED_SCHEMAS = {
-    "user_purchases.aggregated": ["user_id", "store_id", "total_purchased"],
-    "tpv.aggregated": ["store_name", "year_semester", "tpv"],
-    "quantity.aggregated": ["year_month", "item_name", "selling_qty"],
-    "profit.aggregated": ["year_month", "item_name", "profit_sum"],
-    "joined.menu_items": ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
-}
-SCHEMAS.update(AGGREGATED_SCHEMAS)

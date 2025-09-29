@@ -7,7 +7,6 @@ from typing import Dict, List, Tuple
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
-from communication.protocol.schemas import CLEAN_SCHEMAS, AGGREGATED_SCHEMAS
 
 logger = logging.getLogger("join")
 
@@ -69,64 +68,88 @@ class Join:
     def start_join(self):
         self.mw.start_consuming(self.callback)
 
-    def _serialize_rows(self, header, rows):
-        """
-        Serializa las filas usando el schema que venga en el header.
-        Funciona tanto para .raw como para .clean porque usa SCHEMAS.
-        """
-        schema_name = header.fields["schema"]
-        # if schema_name not in CLEAN_SCHEMAS:
-        #     raise ValueError(f"Schema '{schema_name}' no encontrado en CLEAN_SCHEMAS (header={header.fields})")
-        # schema_fields = CLEAN_SCHEMAS[schema_name]
-        #return serialize_message(header, rows, schema_fields)
-        return serialize_message(header, rows, header.fields["schema"])
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"]
+            raw_fieldnames = schema.strip()[1:-1]
+
+            # dividir por coma
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            logger.info(f"SCHEMAAAAAA --> {fieldnames}")
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
     
-    def _send_rows(self, header, rows, schema, routing_keys=None):
+
+    def _send_rows(self, header, source, rows, routing_keys=None):
         if not rows:
             return
+
         try:
+            schema = self.define_schema(header)
+
+            if not schema or any(s == "" for s in schema):
+                first_row = rows[0]
+                schema = list(first_row.keys())
+                logger.info(f"SCHEMA reconstruido dinámicamente --> {schema}")
+
+            normalized_rows = []
+            for row in rows:
+                norm_row = {}
+                for field in schema:
+                    value = row.get(field, "")
+                    if isinstance(value, list): #TODO Fix. 
+                        value = ",".join(map(str, value))
+                    norm_row[field] = str(value)
+                normalized_rows.append(norm_row)
+
             out_header = Header({
                 "message_type": "DATA",
-                "query_id": header.fields["query_id"],
-                "stage": "JoinMenu",
-                "part": header.fields["part"],
-                "seq": header.fields["seq"],
-                "schema": ",".join(schema),
-                "source": header.fields["source"],
+                "query_id": header.fields.get("query_id"),
+                "stage": header.fields.get("stage"),
+                "part": header.fields.get("part"),
+                "seq": header.fields.get("seq"),
+                "schema": schema,
+                "source": source,
             })
-            payload = self._serialize_rows(out_header, rows)
+
+            payload = serialize_message(out_header, normalized_rows, schema)
+
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
-                    logger.info(f"Enviado batch de {len(rows)} filas a {self.output_exchange} con rk '{rk}'")
-                    logger.info(f"Header: {out_header.fields}")
-                    logger.info(f"Rows: {rows}")
+
+            logger.info(f"Enviado batch de {len(rows)} filas a {self.output_exchange} con rk={rks}")
+            logger.info(f"Header: {out_header.fields}")
+            logger.info(f"Rows: {rows}")
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
             logger.error(f"header: {header.fields}")
             logger.error(f"rows: {rows}")
     
-    def _forward_eof(self, header, schema, routing_keys=None):
+    
+    def _forward_eof(self, header, stage, routing_keys=None):
         try:
             out_header = Header({
-                "message_type": "EOF",
+                "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
                 "stage": "JoinMenu",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
-                "schema": ",".join(schema),
+                "schema":  header.fields["schema"],
                 "source": header.fields["source"],
             })
-            eof_payload = self._serialize_rows(out_header, [])
+            eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
-            if not rks:  # fanout
-                #logger.info(f"ENTRA AL FANOUT")
+            if not rks:  
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
-                #logger.info(f"ENTRA AL ROUT CON KEY")
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
@@ -158,12 +181,32 @@ class MenuJoin(Join):
     OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
     OUTPUT_FILE_BASENAME = "menu_join.csv"
 
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("item_name")
+            logger.info(f"SCHEMAAAAAA --> {fieldnames}")
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
+            # logger.info(f"1:SCHEMA EN EL CALL BACK--->{header.fields.get("schema")}  y STAGE {header.fields.get("stage")}")
+            
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
+            message_schema = header.fields.get("schema")
+
+            logger.info(f"2:SCHEMA EN EL CALL BACK--->{message_schema}  y STAGE {message_stage}")
 
             # EOF
             if message_type == "EOF":
@@ -175,11 +218,11 @@ class MenuJoin(Join):
 
                     for batch in self._read_batches(self.files["transaction_items"], 1000): #TODO: Esta hardcodeado el batch
                         joined = self._join_batch(batch)
-                        self._send_rows(header, joined, self.OUTPUT_FIELDS)
+                        self._send_rows(header, "menu_join", joined, self.output_rk)
 
                 elif source.startswith("transaction_items"):
                     if self.source_file_closed:
-                        self._forward_eof(header, self.OUTPUT_FIELDS,routing_keys=self.output_rk)
+                        self._forward_eof(header, "menu_join", routing_keys=self.output_rk)
 
                 if ch is not None and hasattr(method, "delivery_tag"):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -194,7 +237,7 @@ class MenuJoin(Join):
                     self._append_rows(self.files["transaction_items"], rows)
                 else:
                     joined = self._join_batch(rows)
-                    self._send_rows(header, joined, self.OUTPUT_FIELDS)
+                    self._send_rows(header, "menu_join", joined, self.output_rk)
 
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -207,7 +250,7 @@ class MenuJoin(Join):
 
 
     def _build_menu_index(self) -> Dict[str, str]:
-        """ Construye el índice de item_id -> item_name una vez que tengo todo el menú """
+        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
         menu_rows = self._read_rows(self.files["menu_items"])
 
         def pick_item_id(row):
@@ -246,8 +289,8 @@ class MenuJoin(Join):
                 "transaction_id": t.get("transaction_id", t.get("trx_id", "")),
                 "created_at": t.get("created_at", ""),
                 "item_id": item_id,
-                "item_name": self.source_file_index.get(item_id, ""),
                 "subtotal": t.get("subtotal", t.get("amount", "")),
+                "item_name": self.source_file_index.get(item_id, ""),
             })
         return out
 

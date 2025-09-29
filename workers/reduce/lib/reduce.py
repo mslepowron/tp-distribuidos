@@ -2,7 +2,6 @@ import logging
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
-from communication.protocol.schemas import RAW_SCHEMAS
 
 logger = logging.getLogger("reduce")
 
@@ -40,29 +39,37 @@ class Reduce:
     def start_reducer(self):
         self.mw.start_consuming(self.callback)
 
-    def _serialize_rows(self, header, rows):
-        schema_name = header.fields["schema"]
-        if schema_name not in RAW_SCHEMAS:
-            raise ValueError(f"Schema '{schema_name}' no encontrado en RAW_SCHEMAS (header={header.fields})")
-        schema_fields = RAW_SCHEMAS[schema_name]
-        return serialize_message(header, rows, schema_fields)
-    
-    def _send_rows(self, header, rows, routing_keys=None):
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"]
+            raw_fieldnames = schema.strip()[1:-1]
+
+            # dividir por coma
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+    def _send_rows(self, header, rows, routing_keys):
         if not rows:
             return
         try:
+            schema = self.define_schema(header)
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": self.__class__.__name__,
+                "stage": "FilterYear",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
-                "schema": header.fields["schema"],
+                "schema": schema,
                 "source": header.fields["source"],
             })
-            payload = self._serialize_rows(out_header, rows)
+            payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
-            if not rks:  #caso fanout; aca nos aplica para el hours
+            if not rks:  #caso fanout; 
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
@@ -70,9 +77,18 @@ class Reduce:
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
-    def _forward_eof(self, header, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None):
         try:
-            eof_payload = self._serialize_rows(header, [])
+            out_header = Header({
+                "message_type": header.fields["message_type"],
+                "query_id": header.fields["query_id"],
+                "stage": stage,
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": header.fields["schema"],
+                "source": header.fields["source"],
+            })
+            eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
@@ -88,7 +104,7 @@ class Reduce:
 class UserPurchasesReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.schema_out = "user_purchases.aggregated"
+        self.schema_out_fields = ["store_name", "user_id", "user_purchases"]
         self.aggregates = {}  # clave: (user_id, store_id) → valor: total final_amount
         self.eofs_received = 0
         self.eofs_expected = 1  
@@ -96,7 +112,7 @@ class UserPurchasesReducer(Reduce):
     def start_reduce(self):
         self.mw.start_consuming(self.callback)
 
-    def callback(self, ch, method, properties, body):
+    def callback(self, ch, method, body):
         try:
             header, rows = deserialize_message(body)
 
@@ -108,12 +124,14 @@ class UserPurchasesReducer(Reduce):
                 return
 
             for row in rows:
-                key = (row["user_id"], row["store_id"])
-                final_amount = float(row.get("final_amount") or 0.0)
-                if key in self.aggregates:
-                    self.aggregates[key] += final_amount
-                else:
-                    self.aggregates[key] = final_amount
+                user_id = row.get("user_id")
+                store_key = row.get("store_name") or row.get("store_id")  # preferimos nombre
+                if user_id is None or store_key is None:
+                    # si viene una fila incompleta, la ignoramos para no romper
+                    continue
+                amount = float(row.get("final_amount") or 0.0)
+                key = (user_id, store_key)
+                self.aggregates[key] = self.aggregates.get(key, 0.0) + amount
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -123,20 +141,21 @@ class UserPurchasesReducer(Reduce):
     def _emit_result(self, header):
         result_rows = [
             {
-                "user_id": uid,
-                "store_id": sid,
-                "total_purchased": round(total, 2)
+                "store_name": store_key,      # si no existía nombre, cayó a store_id arriba
+                "user_id": user_id,
+                "user_purchases": round(total, 2)
             }
-            for (uid, sid), total in self.aggregates.items()
+            for (user_id, store_key), total in self.aggregates.items()
         ]
 
-        header.fields["schema"] = self.schema_out
-        self._send_rows(header, result_rows)
+        header.fields["schema"] = str(self.schema_out_fields)
+        header.fields["stage"] = "ReduceUserPurchases"
+        self._send_rows(header, result_rows, routing_keys=self.output_rk)
 
 class TpvReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.schema_out = "tpv.aggregated"
+        self.schema_out_fields = ["store_name", "year_semester", "tpv"]
         self.aggregates = {}  # key: (store_name, year_semester) → sum(final_amount)
         self.eofs_received = 0
         self.eofs_expected = 1
@@ -144,7 +163,7 @@ class TpvReducer(Reduce):
     def start_reducer(self):
         self.mw.start_consuming(self.callback)
 
-    def callback(self, ch, method, properties, body):
+    def callback(self, ch, method, body):
         try:
             header, rows = deserialize_message(body)
 
@@ -156,12 +175,13 @@ class TpvReducer(Reduce):
                 return
 
             for row in rows:
-                key = (row["store_name"], row["year_semester"])
+                store = row.get("store_name") or row.get("store_id")
+                semester = row.get("year_semester")
+                if not store or not semester:
+                    continue
                 amount = float(row.get("final_amount") or 0.0)
-                if key in self.aggregates:
-                    self.aggregates[key] += amount
-                else:
-                    self.aggregates[key] = amount
+                key = (store, semester)
+                self.aggregates[key] = self.aggregates.get(key, 0.0) + amount
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -177,13 +197,15 @@ class TpvReducer(Reduce):
             }
             for (store, semester), amount in self.aggregates.items()
         ]
-        header.fields["schema"] = self.schema_out
-        self._send_rows(header, result_rows)
+        header.fields["schema"] = str(self.schema_out_fields)
+        header.fields["stage"] = "ReduceTPV"
+
+        self._send_rows(header, result_rows, routing_keys=self.output_rk)
 
 class QuantityReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.schema_out = "quantity.aggregated"
+        self.schema_out_fields = ["year_month", "item_name", "selling_qty"]
         self.aggregates = {}  # key: (year_month, item_name) → count
         self.eofs_received = 0
         self.eofs_expected = 1
@@ -191,7 +213,7 @@ class QuantityReducer(Reduce):
     def start_reducer(self):
         self.mw.start_consuming(self.callback)
 
-    def callback(self, ch, method, properties, body):
+    def callback(self, ch, method, body):
         try:
             header, rows = deserialize_message(body)
 
@@ -203,11 +225,12 @@ class QuantityReducer(Reduce):
                 return
 
             for row in rows:
-                key = (row["year_month"], row["item_name"])
-                if key in self.aggregates:
-                    self.aggregates[key] += 1
-                else:
-                    self.aggregates[key] = 1
+                ym = row.get("year_month")
+                item = row.get("item_name")
+                if not ym or not item:
+                    continue
+                key = (ym, item)
+                self.aggregates[key] = self.aggregates.get(key, 0) + 1
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -223,13 +246,14 @@ class QuantityReducer(Reduce):
             }
             for (ym, item), qty in self.aggregates.items()
         ]
-        header.fields["schema"] = self.schema_out
-        self._send_rows(header, result_rows)
+        header.fields["schema"] = str(self.schema_out_fields)
+        header.fields["stage"] = "ReduceQuantity"
+        self._send_rows(header, result_rows, routing_keys=self.output_rk)
 
 class ProfitReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.schema_out = "profit.aggregated"
+        self.schema_out_fields = ["year_month", "item_name", "profit_sum"]
         self.aggregates = {}  # clave: (year_month, item_name) → suma de subtotales
         self.eofs_received = 0
         self.eofs_expected = 1
@@ -237,7 +261,7 @@ class ProfitReducer(Reduce):
     def start_reducer(self):
         self.mw.start_consuming(self.callback)
 
-    def callback(self, ch, method, properties, body):
+    def callback(self, ch, method, body):
         try:
             header, rows = deserialize_message(body)
 
@@ -249,12 +273,13 @@ class ProfitReducer(Reduce):
                 return
 
             for row in rows:
-                key = (row["year_month"], row["item_name"])
+                ym = row.get("year_month")
+                item = row.get("item_name")
+                if not ym or not item:
+                    continue
                 subtotal = float(row.get("subtotal") or 0.0)
-                if key in self.aggregates:
-                    self.aggregates[key] += subtotal
-                else:
-                    self.aggregates[key] = subtotal
+                key = (ym, item)
+                self.aggregates[key] = self.aggregates.get(key, 0.0) + subtotal
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -270,5 +295,6 @@ class ProfitReducer(Reduce):
             }
             for (ym, item), amount in self.aggregates.items()
         ]
-        header.fields["schema"] = self.schema_out
-        self._send_rows(header, result_rows)
+        header.fields["schema"] = str(self.schema_out_fields)
+        header.fields["stage"] = "ReduceProfit"
+        self._send_rows(header, result_rows, routing_keys=self.output_rk)
