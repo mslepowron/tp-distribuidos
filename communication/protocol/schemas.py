@@ -45,14 +45,11 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
     "users.clean": [
         "user_id", "birthdate"
     ],
-}
-
-SCHEMA_EOF: Dict[str, List[str]] = {
     "EOF": []
 }
 
 #All schemas
-SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS}
+SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS,}
 
 AGGREGATED_SCHEMAS = {
     "user_purchases.aggregated": ["user_id", "store_id", "total_purchased"],

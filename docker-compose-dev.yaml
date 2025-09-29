@@ -82,76 +82,76 @@ services:
       - ./storage:/storage
     networks:
       - coffee_analysis_net
-  map_year_month:
-    build:
-      context: .
-      dockerfile: workers/map/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - MAP_TYPE=YearMonth
-      - QUEUE_NAME=map_year_month_q
-      - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
-      - OUTPUT_EXCHANGE=map_year_month_ex
-      - OUTPUT_RKS=["quantity", "sum"]
-    networks:
-      - coffee_analysis_net
-  reduce_user_purchases:
-    build:
-      context: .
-      dockerfile: workers/reduce/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - REDUCE_TYPE=user_purchases
-      - QUEUE_NAME=reduce_user_purchases_q
-      - INPUT_BINDINGS=[["store_names_ex","direct",""]] #falta el de despues del join 
-      - OUTPUT_EXCHANGE=reduce_user_purchases_ex
-      - OUTPUT_RKS=["q_user_purchases"]
-    networks:
-      - coffee_analysis_net
-  reduce_tpv:
-    build:
-      context: .
-      dockerfile: workers/reduce/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - REDUCE_TYPE=tpv
-      - QUEUE_NAME=reduce_tpv_q
-      - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]] #aca va el de desp del map
-      - OUTPUT_EXCHANGE=reduce_tpv_ex
-      - OUTPUT_RKS=["q_semester_tpv"]
-    networks:
-      - coffee_analysis_net
-  reduce_quantity:
-    build:
-      context: .
-      dockerfile: workers/reduce/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - REDUCE_TYPE=quantity
-      - QUEUE_NAME=reduce_quantity_q
-      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
-      - OUTPUT_EXCHANGE=reduce_qty_ex
-      - OUTPUT_RKS=["q_month_top_qty"]
-    networks:
-      - coffee_analysis_net
-  reduce_profit:
-    build:
-      context: .
-      dockerfile: workers/reduce/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - REDUCE_TYPE=profit
-      - QUEUE_NAME=reduce_profit_q
-      - INPUT_BINDINGS=[["map_year_month_ex","direct","sum"]]
-      - OUTPUT_EXCHANGE=reduce_profit_ex
-      - OUTPUT_RKS=["q_month_top_rev"]
-    networks:
-      - coffee_analysis_net
+  # map_year_month:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/map/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - MAP_TYPE=YearMonth
+  #     - QUEUE_NAME=map_year_month_q
+  #     - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
+  #     - OUTPUT_EXCHANGE=map_year_month_ex
+  #     - OUTPUT_RKS=["quantity", "sum"]
+  #   networks:
+  #     - coffee_analysis_net
+  # reduce_user_purchases:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - REDUCE_TYPE=user_purchases
+  #     - QUEUE_NAME=reduce_user_purchases_q
+  #     - INPUT_BINDINGS=[["store_names_ex","direct",""]] #falta el de despues del join 
+  #     - OUTPUT_EXCHANGE=reduce_user_purchases_ex
+  #     - OUTPUT_RKS=["q_user_purchases"]
+  #   networks:
+  #     - coffee_analysis_net
+  # reduce_tpv:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - REDUCE_TYPE=tpv
+  #     - QUEUE_NAME=reduce_tpv_q
+  #     - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]] #aca va el de desp del map
+  #     - OUTPUT_EXCHANGE=reduce_tpv_ex
+  #     - OUTPUT_RKS=["q_semester_tpv"]
+  #   networks:
+  #     - coffee_analysis_net
+  # reduce_quantity:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - REDUCE_TYPE=quantity
+  #     - QUEUE_NAME=reduce_quantity_q
+  #     - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
+  #     - OUTPUT_EXCHANGE=reduce_qty_ex
+  #     - OUTPUT_RKS=["q_month_top_qty"]
+  #   networks:
+  #     - coffee_analysis_net
+  # reduce_profit:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - REDUCE_TYPE=profit
+  #     - QUEUE_NAME=reduce_profit_q
+  #     - INPUT_BINDINGS=[["map_year_month_ex","direct","sum"]]
+  #     - OUTPUT_EXCHANGE=reduce_profit_ex
+  #     - OUTPUT_RKS=["q_month_top_rev"]
+  #   networks:
+  #     - coffee_analysis_net
 networks:
   coffee_analysis_net:
     ipam:

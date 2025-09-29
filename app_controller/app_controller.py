@@ -9,7 +9,7 @@ import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
-from communication.protocol.schemas import CLEAN_SCHEMAS, SCHEMA_EOF
+from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
 
 from pathlib import Path
@@ -186,6 +186,7 @@ class AppController:
     def _send_csv_in_batches(self, csv_path: Path, routing_key: str):
         """Lee los CSV de a batcges y lo manda al exchange con la routing key para ese archivo"""
         source = SCHEMA_BY_RK[routing_key]
+        schema = CLEAN_SCHEMAS[source]
         try:
             with csv_path.open(newline="") as csvfile:
                 reader = csv.DictReader(csvfile)
@@ -195,17 +196,20 @@ class AppController:
                         break
                     batch.append(row)
                     if len(batch) >= BATCH_SIZE:
-                        self.send_batch(batch, routing_key=routing_key, source=source)
+                        # self.send_batch(batch, routing_key=routing_key, source=source)
+                        self.send_batch(batch, routing_key=routing_key, source=source, schema=schema)
                         batch = []
                 if batch and self._running:
-                    self.send_batch(batch, routing_key=routing_key, source=source)
+                    #self.send_batch(batch, routing_key=routing_key, source=source)
+                    self.send_batch(batch, routing_key=routing_key, source=source, schema=schema)
             logger.info(f"Archivo enviado completo: {csv_path.name} a rk={routing_key}")
         except FileNotFoundError:
             logger.error(f"CSV no encontrado: {csv_path}")
         except Exception as e:
             logger.error(f"Error leyendo {csv_path}: {e}")
 
-    def send_batch(self, batch, routing_key: str, source: str):
+    # def send_batch(self, batch, routing_key: str, source: str):
+    def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
         if not self._running or not batch:
             return
         try:
@@ -215,12 +219,12 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
                 ("seq", str(uuid4())),
-                ("schema", source),
+                ("schema", schema),
                 ("source", source)
             ]
             header = Header(header_fields)
 
-            message_bytes = serialize_message(header, batch, CLEAN_SCHEMAS[source])
+            message_bytes = serialize_message(header, batch, schema)
             route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
             self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
 
@@ -231,6 +235,7 @@ class AppController:
 
     def send_end_of_file(self, routing_key: str):
         try:
+            schema = []
             source = SCHEMA_BY_RK[routing_key]
             header_fields = [
                 ("message_type", "EOF"),
@@ -238,12 +243,12 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", "transactions.raw"),
                 ("seq", str(uuid4())),
-                ("schema", "EOF"),
+                ("schema", schema),
                 ("source", source)
             ]
             header = Header(header_fields)
             # Enviamos un mensaje vacío, el filtro lo va a interpretar
-            message_bytes = serialize_message(header, [], SCHEMA_EOF)
+            message_bytes = serialize_message(header, [], schema)
             route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
             self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
             logger.info(f"EOF → {self.input_exchange}:{routing_key}")
