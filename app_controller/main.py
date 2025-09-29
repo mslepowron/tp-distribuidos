@@ -2,7 +2,7 @@ import signal
 import os
 import configparser
 from app_controller import AppController
-
+from initializer import clean_all_files
 
 def graceful_shutdown(signum, frame):
     """Handler para SIGTERM o SIGINT que llama al shutdown del controller."""
@@ -11,11 +11,11 @@ def graceful_shutdown(signum, frame):
         graceful_shutdown.controller.shutdown()
 
 def main():
+    clean_all_files()
     config_path = os.getenv("CONFIG_PATH", "config/config.ini")
     config = configparser.ConfigParser()
     config.read(config_path)
     
-
     cfg = config["DEFAULT"]
     input_exchange = cfg["INPUT_EXCHANGE"]
     routing_keys = [rk.strip() for rk in cfg["ROUTING_KEYS"].split(",")]

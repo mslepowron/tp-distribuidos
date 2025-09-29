@@ -20,7 +20,7 @@ services:
       - STORAGE_DIR=/storage
     volumes:
       - ./app_controller/config/config.ini:/config/config.ini:ro
-      - ./app_controller/storage:/storage:ro
+      - ./app_controller/storage:/storage
     networks:
       - coffee_analysis_net
   filter_year:
