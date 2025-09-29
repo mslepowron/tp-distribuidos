@@ -11,7 +11,7 @@ from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
 from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
-
+from initializer import clean_all_files_grouped
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -27,10 +27,10 @@ BATCH_SIZE = 5 #TODO> Varialbe de entorno
 SCHEMA_BY_RK = {
     "transactions": "transactions.clean",
     "transaction_items": "transaction_items.clean",
-    "menu_items": "menu_items.clean",
+    "menu_items": "menu_clean",
     "users": "users.clean",
     "stores": "stores.clean",
-} #TODO esto desp cambiarlo a clean
+} #TODO esto desp sacarle el clean? No me convence xq van a ir cambiando los schemas.
 
 class AppController:
     def __init__(self, host, input_exchange, input_routing_keys,
@@ -82,38 +82,6 @@ class AppController:
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
 
-    def _routing_key_by_files(self) -> Dict[str, List[Path]]:
-        files_by_rk: Dict[str, List[Path]] = {
-            "transactions": [],
-            "transaction_items": [],
-            "menu_items": [],
-            "users": [],
-            "stores": [],
-        }
-
-        if not STORAGE_DIR.exists():
-            logger.warning(f"Storage dir '{STORAGE_DIR}' no existe.")
-            return files_by_rk
-
-        for p in STORAGE_DIR.glob("*.csv"):
-            name = p.name.lower().strip()
-
-            if name == "transactions.csv" or name.startswith("transactions_"):
-                files_by_rk["transactions"].append(p)
-            elif name == "transaction_items.csv" or name.startswith("transaction_items_"):
-                files_by_rk["transaction_items"].append(p)
-            elif name == "menu_items.csv":
-                files_by_rk["menu_items"].append(p)
-            elif name == "users.csv":
-                files_by_rk["users"].append(p)
-            elif name == "stores.csv" or name == "stores .csv":  # por si viene con espacio
-                files_by_rk["stores"].append(p)
-    
-        for rk in files_by_rk:
-            files_by_rk[rk].sort(key=lambda x: x.name)
-
-        return files_by_rk
-    
     def _wait_for_queues(self, queue_names, timeout=30):
         """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
         deadline = time.time() + timeout
@@ -139,22 +107,12 @@ class AppController:
 
         # time.sleep(10)
         self._wait_for_queues(["filter_year_q"])
-        files_by_rk = self._routing_key_by_files()
         try:
-            for rk in ["transactions", "transaction_items", "menu_items", "users", "stores"]:
-                file_list = files_by_rk.get(rk, [])
-                if not file_list:
-                    logger.info(f"No hay archivos para '{rk}' en {STORAGE_DIR}")
-                    continue
-
-                logger.info(f"Procesando {len(file_list)} archivo(s) para rk='{rk}'")
-                for csv_path in file_list:
-                    if not self._running:
-                        break
-                    self._send_csv_in_batches(csv_path, routing_key=rk)
-
-                # Un único EOF por tipo de archivo
-                self.send_end_of_file(routing_key=rk)
+            files_grouped = clean_all_files_grouped()
+            for routing_key, filename, row_iterator in files_grouped:
+                logger.info(f"Procesando archivo {filename} con routing_key={routing_key}")
+                self._send_batches_from_iterator(row_iterator, routing_key)
+                self.send_end_of_file(routing_key=routing_key)
 
         except Exception as e:
             logger.error(f"Error processing files: {e}")
@@ -183,27 +141,18 @@ class AppController:
         finally:
             self.shutdown()
 
-    def _send_csv_in_batches(self, csv_path: Path, routing_key: str):
-        """Lee los CSV de a batcges y lo manda al exchange con la routing key para ese archivo"""
+    def _send_batches_from_iterator(self, row_iterator, routing_key: str):
         source = SCHEMA_BY_RK[routing_key]
-        try:
-            with csv_path.open(newline="") as csvfile:
-                reader = csv.DictReader(csvfile)
+        batch = []
+        for row in row_iterator:
+            if not self._running:
+                break
+            batch.append(row)
+            if len(batch) >= BATCH_SIZE:
+                self.send_batch(batch, routing_key, source)
                 batch = []
-                for row in reader:
-                    if not self._running:
-                        break
-                    batch.append(row)
-                    if len(batch) >= BATCH_SIZE:
-                        self.send_batch(batch, routing_key=routing_key, source=source)
-                        batch = []
-                if batch and self._running:
-                    self.send_batch(batch, routing_key=routing_key, source=source)
-            logger.info(f"Archivo enviado completo: {csv_path.name} a rk={routing_key}")
-        except FileNotFoundError:
-            logger.error(f"CSV no encontrado: {csv_path}")
-        except Exception as e:
-            logger.error(f"Error leyendo {csv_path}: {e}")
+        if batch and self._running:
+            self.send_batch(batch, routing_key, source)
 
     def send_batch(self, batch, routing_key: str, source: str):
         if not self._running or not batch:
