@@ -43,8 +43,7 @@ services:
     environment:
       - FILTER_TYPE=Hour
       - QUEUE_NAME=filter_hour_q
-      # - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
-      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","fanout",""]]
+      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
       - OUTPUT_EXCHANGE=filter_hour_ex
       - OUTPUT_RKS=[]
     depends_on:
@@ -93,7 +92,7 @@ services:
       - QUEUE_NAME=join_store_q
       - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","direct","transactions"]]
       - OUTPUT_EXCHANGE=join_stores_ex
-      - OUTPUT_RKS=[]
+      - OUTPUT_RKS=["stores_joined", "reduce_user_purchases"]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage
@@ -122,7 +121,7 @@ services:
     environment:
       - MAP_TYPE=YearHalf
       - QUEUE_NAME=map_year_half_q
-      - INPUT_BINDINGS=[["join_stores_ex","fanout",""]]
+      - INPUT_BINDINGS=[["filter_hour_ex","fanout",""]]
       - OUTPUT_EXCHANGE=map_year_half_ex
       - OUTPUT_RKS=["map_half"]
     networks:
@@ -169,6 +168,20 @@ services:
       - OUTPUT_RKS=["q_semester_tpv"]
     networks:
       - coffee_analysis_net
+  reduce_user_purchases:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - REDUCE_TYPE=user_purchases
+      - QUEUE_NAME=reduce_user_purchases_q
+      - INPUT_BINDINGS=[["join_stores_ex","direct","reduce_user_purchases"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_top3_birthdays"] #temporal
+    networks:
+      - coffee_analysis_net
   top_selling_items:
     build:
       context: .
@@ -197,35 +210,20 @@ services:
       - OUTPUT_RKS=["q_month_top_rev"]
     networks:
       - coffee_analysis_net
-#    reduce_tpv:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=tpv
-#        - QUEUE_NAME=reduce_tpv_q
-#        - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]]
-#        - OUTPUT_EXCHANGE=reduce_tpv_ex
-#        - OUTPUT_RKS=["q_semester_tpv"]
-#      networks:
-#        - coffee_analysis_net
-#    reduce_user_purchases:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=user_purchases
-#        - QUEUE_NAME=reduce_user_purchases_q
-#        - INPUT_BINDINGS=[["store_names_ex","direct","store_names"]] falta el de despues del join 
-#        - OUTPUT_EXCHANGE=reduce_user_purchases_ex
-#        - OUTPUT_RKS=["q_user_purchases"]
-#        - STORAGE_DIR=/storage
-#      networks:
-#        - coffee_analysis_net
+  top_store_user_purchases:
+    build:
+      context: .
+      dockerfile: workers/top/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - TOP_TYPE=TopRevenueGeneratinItems
+      - QUEUE_NAME=top_generating_items_q
+      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_month_top_rev"]
+    networks:
+      - coffee_analysis_net
 networks:
   coffee_analysis_net:
     ipam:

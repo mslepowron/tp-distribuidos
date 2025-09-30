@@ -281,12 +281,44 @@ class UserPurchasesReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.schema_out_fields = ["store_name", "user_id", "user_purchases"]
-        self.aggregates = {}  # clave: (user_id, store_id) → valor: total final_amount
+        self.storage_file = Path("storage/reduce_user_purchases.csv")
         self.eofs_received = 0
-        self.eofs_expected = 1  
+        self.eofs_expected = 1
 
-    def start_reduce(self):
+        # inicializamos archivo vacío
+        self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+        if self.storage_file.exists():
+            self.storage_file.unlink()
+
+    def start_reducer(self):
         self.mw.start_consuming(self.callback)
+
+    def _update_storage(self, store_name, user_id, final_amount):
+        """Lee el archivo y actualiza la suma para (yh,store)."""
+        rows = {}
+        if self.storage_file.exists():
+            with open(self.storage_file, newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rows[(r["store_name"], r["user_id"])] = float(r["user_purchases"])
+
+        # actualizar acumulado
+        key = (store_name, user)
+        old_val = rows.get(key, 0.0)
+        rows[key] = old_val + 1 # incremento la cantidad de compras del usr en 1
+        logger.debug(f"[UserPurchasesReducer] Update ({store_name}, {user}): {old_val} -> {rows[key]}")
+
+        # reescribir archivo con todos los acumulados
+        with open(self.storage_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=self.schema_out_fields)
+            writer.writeheader()
+            for (store_name, user), user_purchases in rows.items():
+                writer.writerow({
+                    "store_name": store_name,
+                    "user_id": user,
+                    "user_purchases": user_purchases
+                })
+        logger.info(f"[UserPurchasesReducer] Storage reescrito con {len(rows)} filas.")
 
     def callback(self, ch, method, properties, body):
         try:
@@ -294,21 +326,22 @@ class UserPurchasesReducer(Reduce):
 
             if header.fields.get("message_type") == "EOF":
                 self.eofs_received += 1
+                logger.info(f"[UserPurchasesReducer] EOF recibido ({self.eofs_received}/{self.eofs_expected})")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
-                if self.eofs_received >= self.eofs_expected:
+                if self.eofs_received >= self.eofs_expected: #esta al pedo
                     self._emit_result(header)
-                    self._forward_eof(header, "UserPurchaseReducer", self.output_rk)
+                    self._forward_eof(header, "UserPurchasesReducer", self.output_rk)
                 return
 
+            # procesar filas e ir actualizando archivo
             for row in rows:
-                user_id = row.get("user_id")
-                store_key = row.get("store_name") or row.get("store_id")  # preferimos nombre
-                if user_id is None or store_key is None:
-                    # si viene una fila incompleta, la ignoramos para no romper
+                logger.info(f"[UserPurchasesReducer] Fila : {row}")
+                store_name = row.get("store_name")
+                user = row.get("user_id")
+                if not store_name or not user:
+                    logger.warning(f"[UserPurchasesReducer] Fila inválida: {row}")
                     continue
-                amount = float(row.get("final_amount") or 0.0)
-                key = (user_id, store_key)
-                self.aggregates[key] = self.aggregates.get(key, 0.0) + amount
+                self._update_storage(store_name, user, 0)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -316,18 +349,18 @@ class UserPurchasesReducer(Reduce):
             logger.error(f"Error en UserPurchasesReducer: {e}")
 
     def _emit_result(self, header):
-        result_rows = [
-            {
-                "store_name": store_key,      # si no existía nombre, cayó a store_id arriba
-                "user_id": user_id,
-                "user_purchases": round(total, 2)
-            }
-            for (user_id, store_key), total in self.aggregates.items()
-        ]
+        result_rows = []
+        if self.storage_file.exists():
+            with open(self.storage_file, newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    result_rows.append(r)
+        logger.info(f"[UserPurchasesReducer] Emisión final con {len(result_rows)} filas.")
 
         header.fields["schema"] = str(self.schema_out_fields)
-        header.fields["stage"] = "ReduceUserPurchases"
-        self._send_rows(header, "users_reduce", result_rows, routing_keys=self.output_rk)
+        header.fields["stage"] = "ReduceuserPurchases"
+        self._send_rows(header, "user_purchases_reduce", result_rows, routing_keys=self.output_rk)
+
 
 class TpvReducer(Reduce):
     def __init__(self, *args, **kwargs):
@@ -352,7 +385,7 @@ class TpvReducer(Reduce):
             with open(self.storage_file, newline="") as f:
                 reader = csv.DictReader(f)
                 for r in reader:
-                    rows[(r["year_half_created_at"], r["store_name"])] = float(r["profit_sum"])
+                    rows[(r["year_half_created_at"], r["store_name"])] = float(r["tpv"])
 
         # actualizar acumulado
         key = (yh, store)

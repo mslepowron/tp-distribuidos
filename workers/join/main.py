@@ -41,6 +41,7 @@ def main():
 
         storage = Path(os.getenv("STORAGE_DIR", "storage"))
         logger.info(f"STORAGE: {storage}")
+        logger.info(f"routing keys: {output_rks}")
 
         j = JoinFactory.create(join_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
 

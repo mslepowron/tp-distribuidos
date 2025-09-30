@@ -35,11 +35,14 @@ class Join:
                 f.touch()
 
         self.join_out_file: Path = storage / self.OUTPUT_FILE_BASENAME
+
+        logger.info(f"en el init {output_rks}")
         if isinstance(output_rks, str):
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
 
+        logger.info(f"en el init2 {self.output_rk}")
         for f in self.files.values():
             if not f.exists():
                 f.touch()
@@ -121,6 +124,7 @@ class Join:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
 
             logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
+            logger.info(f"rk={self.output_rk}")
         except Exception as e:
             logger.error(f"Error sending results: {e}")
     
