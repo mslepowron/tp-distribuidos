@@ -1,6 +1,11 @@
 import pytest
 import json
 
+
+@pytest.fixture
+def rabbit_host():
+    return "localhost"
+
 def sample_transaction_message():
     return json.dumps({
         "transaction_id": "d866383d-dece-43c0-b96b-b01cffc4ac4c",
@@ -15,7 +20,3 @@ def sample_menu_item_message():
         "item_id": "3",
         "item_name": "Latte"
     })
-
-@pytest.fixture
-def rabbit_host():
-    return "localhost"
