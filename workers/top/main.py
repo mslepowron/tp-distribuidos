@@ -2,11 +2,12 @@ import json
 import logging
 import os
 from pathlib import Path
-from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-from lib.reduceFactory import ReduceFactory
+from middleware.rabbitmq.mom import MessageMiddlewareExchange
+from lib.topFactory import TopFactory
+
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("reduce-main")
+logger = logging.getLogger("top-main")
 
 def parse_json_env(name, default=None):
     raw = os.getenv(name)
@@ -20,8 +21,8 @@ def parse_json_env(name, default=None):
 
 def main():
     try:
-        reduce_type = os.getenv("REDUCE_TYPE")
-        queue_name = os.getenv("QUEUE_NAME", f"{reduce_type.lower()}_q")
+        top_type = os.getenv("TOP_TYPE")
+        queue_name = os.getenv("QUEUE_NAME", f"{top_type.lower()}_q")
 
         input_bindings  = parse_json_env("INPUT_BINDINGS", [])
         output_exchange = os.getenv("OUTPUT_EXCHANGE", "")
@@ -33,20 +34,17 @@ def main():
             bindings=[(ex, ex_type, rk) for ex, ex_type, rk in input_bindings]
         )
 
-        for ex, ex_type, rk in input_bindings:
-            logger.info(f"Binding: ex={ex} type={ex_type} rk={rk}")
-
         mw_out = MessageMiddlewareExchange(
             host="rabbitmq",
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        storage = Path(os.getenv("STORAGE_DIR", "storage"))
-        f = ReduceFactory.create(reduce_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
-        f.start()
+        t = TopFactory.create(top_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
+
+        t.start()
 
     except Exception as e:
-        logger.error(f"Failed to initialize reduce: {e}")
+        logger.error(f"Failed to initialize top: {e}")
 
 if __name__ == "__main__":
     main()

@@ -129,7 +129,7 @@ class Join:
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": "JoinMenu",
+                "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema":  header.fields["schema"],

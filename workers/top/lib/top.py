@@ -2,13 +2,12 @@ import logging
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
-from communication.protocol.schemas import RAW_SCHEMAS
-from datetime import datetime
+from communication.protocol.schemas import CLEAN_SCHEMAS
 
-logger = logging.getLogger("map")
+logger = logging.getLogger("top")
 
 
-class Map:
+class Top:
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings):
         self.mw = mw_in
         self.result_mw = mw_out
@@ -18,11 +17,13 @@ class Map:
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
+        self.top_lenght = 3
+        self.top = []
 
     def start(self):
         try:
             logger.info("Waiting for messages...")
-            self.start_map()
+            self.start_top()
         except KeyboardInterrupt:
             logger.info("Shutting down consumer...")
             self.mw.stop_consuming()
@@ -38,7 +39,8 @@ class Map:
         except Exception as e:
             logger.warning(f"No se pudo cerrar correctamente la conexion: {e}")
 
-    def start_map(self):
+    def start_top(self):
+        # """Método abstracto, lo redefine cada hijo."""
         raise NotImplementedError
 
     def define_schema(self, header):
@@ -54,7 +56,8 @@ class Map:
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
-    
+
+
     def _send_rows(self, header, rows, routing_keys):
         if not rows:
             return
@@ -63,7 +66,7 @@ class Map:
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": "Map",
+                "stage": "Top",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema": schema,
@@ -99,12 +102,71 @@ class Map:
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
-        
 
 # ----------------- SUBCLASES -----------------
 
-class MapYearMonth(Map):
-    def start_map(self):
+class TopSellingItems(Top):
+    def start_top(self):
+        self.mw.start_consuming(self.callback)
+
+    def update(self, item, count):
+        # Caso: aún no llegué a n elementos
+        if len(self.top) < self.top_lenght:
+            self.top.append((item, count))
+            self.top.sort(key=lambda x: x[1], reverse=True)
+            return
+
+        # Caso: lista llena, comparo con el minimo (ultimo elemento)
+        if count > self.top[-1][1]:
+            self.top[-1] = (item, count)
+            self.top.sort(key=lambda x: x[1], reverse=True)
+
+    def get_top(self):
+        return self.top
+    
+    def to_csv(self):
+        """Convierte el top a formato CSV en un string"""
+        lines = []
+        for item, count in self.top:
+            lines.append(f"{2024},{item},{count}")
+        return "\n".join(lines)
+
+    def callback(self, ch, method, properties, body):
+        try:
+            header, rows = deserialize_message(body)
+            logger.info(f"recibo rows")
+
+            if header.fields.get("message_type") == "EOF":
+                toped = self.get_top()
+                #csv_str = self.to_csv()
+                result_rows = [
+                    {"year_month_created_at": "2024-10", "item_name": item, "selling_qty": count}
+                    for item, count in toped
+                ]
+                header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
+                header.fields["stage"] = "TopSellingItems"
+                logger.info(f"RESULT ROWS: {result_rows}")
+                self._send_rows(header, result_rows, self.output_rk)
+                self._forward_eof(header, "TopSellingItems", routing_keys=self.output_rk)
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
+            for row in rows:
+                item = row.get("item_name")       # clave del row (ejemplo)
+                count = row.get("selling_qty", 1)     # cantidad (ejemplo)
+                # logger.info(f"row {item}: {count}")
+                if item is not None and count is not None:
+                    self.update(item, count)
+
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except Exception as e:
+            logger.error(f"TopSellingItems error: {e}")
+
+
+class TopRevenueGeneratinItems(Top):
+    def start_top(self):
         self.mw.start_consuming(self.callback)
 
     def define_schema(self, header):
@@ -116,76 +178,55 @@ class MapYearMonth(Map):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            if header.fields["source"].startswith("menu_join"): 
+            if header.fields["source"].startswith("transactions"): 
                 fieldnames.remove("created_at")
-                fieldnames.append("year_month_created_at")
-            # elsif:
-            logger.info(f"SHEMAAA --->{fieldnames}")
+                fieldnames.remove("store_id")
+                fieldnames.remove("user_id")
+           
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
-    def callback(self, ch, method, properties, body):
-        try:
-            header, rows = deserialize_message(body)
+    def update(self, item, count):
+        # Caso: aún no llegué a n elementos
+        if len(self.top) < self.top_lenght:
+            self.top.append((item, count))
+            self.top.sort(key=lambda x: x[1], reverse=True)
+            return
 
-            if header.fields.get("message_type") == "EOF":
-                # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, "MapYearMonth", routing_keys=self.output_rk)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
+        # Caso: lista llena, comparo con el minimo (ultimo elemento)
+        if count > self.top[-1][1]:
+            self.top[-1] = (item, count)
+            self.top.sort(key=lambda x: x[1], reverse=True)
 
-            mapped = []
-
-            for row in rows:
-                try:
-                    date_part = row["created_at"].split(" ")[0]   # 2024-10-01
-                    year_month = "-".join(date_part.split("-")[:2])  # [2024,10] -> 2024-10
-
-                    row["year_month_created_at"] = year_month
-                    if header.fields["source"].startswith("menu_join"):
-                        row.pop("created_at", None)
-                    mapped.append(row)
-                except Exception as e:
-                    logger.warning(f"No se pudo mapear fila {row}: {e}")
-
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            self._send_rows(header, mapped, routing_keys=self.output_rk)
-
-        except Exception as e:
-            logger.error(f"{self.__class__.__name__} error: {e}")
-
-
-class MapYearHalf(Map):
-    def start_map(self):
-        self.mw.start_consuming(self.callback)
+    def get_top(self):
+        return self.top
 
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
-                # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, "MapYearHalf", routing_keys=self.output_rk)
+                toped = self.get_top()
+                logger.info(f"Top {self.top_lenght}: {toped}")
+
+                self._send_rows(header, toped, self.output_rk) #envio el top
+
+                self._forward_eof(header, "TopRevenue",routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            mapped = []
-
             for row in rows:
-                try:
-                    date_part = row["created_at"].split(" ")[0]  
-                    year, month, _ = date_part.split("-")        # "2024", "10", "01"
-                    half = "H1" if int(month) <= 6 else "H2"
-
-                    row["year_half_created_at"] = f"{year}-{half}"
-                    mapped.append(row)
-                except Exception as e:
-                    logger.warning(f"No se pudo mapear fila {row}: {e}")
+                item = row.get("item_name")       # clave del row (ejemplo)
+                count = row.get("profit_sum", 1)     # cantidad (ejemplo)
+                if item is not None and count is not None:
+                    self.top.update(item, count)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            self._send_rows(header, mapped, routing_keys=self.output_rk)
+            # self._send_rows(header, toped, routing_keys=out_rk)
 
         except Exception as e:
-            logger.error(f"{self.__class__.__name__} error: {e}")
+            logger.error(f"TopRevenueItems error: {e}")
+
+
 

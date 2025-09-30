@@ -93,23 +93,51 @@ services:
       - QUEUE_NAME=map_year_month_q
       - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
       - OUTPUT_EXCHANGE=map_year_month_ex
-      - OUTPUT_RKS=["quantity", "sum"]
+      - OUTPUT_RKS=["quantity", "profit"]
     networks:
       - coffee_analysis_net
-#    reduce_user_purchases:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=user_purchases
-#        - QUEUE_NAME=reduce_user_purchases_q
-#        - INPUT_BINDINGS=[["store_names_ex","direct","store_names"]] falta el de despues del join 
-#        - OUTPUT_EXCHANGE=reduce_user_purchases_ex
-#        - OUTPUT_RKS=["q_user_purchases"]
-#      networks:
-#        - coffee_analysis_net
+  reduce_quantity:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - REDUCE_TYPE=quantity
+      - QUEUE_NAME=reduce_quantity_q
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
+      - OUTPUT_EXCHANGE=reduce_qty_ex
+      - OUTPUT_RKS=["month_quantity"]
+    networks:
+      - coffee_analysis_net
+  # reduce_profit:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - REDUCE_TYPE=profit
+  #     - QUEUE_NAME=reduce_profit_q
+  #     - INPUT_BINDINGS=[["map_year_month_ex","direct","q_month_top_qty"]]
+  #     - OUTPUT_EXCHANGE=reduce_profit_ex
+  #     - OUTPUT_RKS=["q_month_top_qty"]
+  #   networks:
+  #     - coffee_analysis_net
+  top_selling_items:
+    build:
+      context: .
+      dockerfile: workers/top/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - TOP_TYPE=TopSellingItems
+      - QUEUE_NAME=top_selling_items_q
+      - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_month_top_qty"]
+    networks:
+      - coffee_analysis_net
 #    reduce_tpv:
 #      build:
 #        context: .
@@ -124,32 +152,19 @@ services:
 #        - OUTPUT_RKS=["q_semester_tpv"]
 #      networks:
 #        - coffee_analysis_net
-#    reduce_quantity:
+#    reduce_user_purchases:
 #      build:
 #        context: .
 #        dockerfile: workers/reduce/Dockerfile
 #      depends_on:
 #        - rabbitmq
 #      environment:
-#        - REDUCE_TYPE=quantity
-#        - QUEUE_NAME=reduce_quantity_q
-#        - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
-#        - OUTPUT_EXCHANGE=reduce_qty_ex
-#        - OUTPUT_RKS=["q_month_top_qty"]
-#      networks:
-#        - coffee_analysis_net
-#    reduce_profit:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=profit
-#        - QUEUE_NAME=reduce_profit_q
-#        - INPUT_BINDINGS=[["map_year_month_ex","direct","sum"]]
-#        - OUTPUT_EXCHANGE=reduce_profit_ex
-#        - OUTPUT_RKS=["q_month_top_rev"]
+#        - REDUCE_TYPE=user_purchases
+#        - QUEUE_NAME=reduce_user_purchases_q
+#        - INPUT_BINDINGS=[["store_names_ex","direct","store_names"]] falta el de despues del join 
+#        - OUTPUT_EXCHANGE=reduce_user_purchases_ex
+#        - OUTPUT_RKS=["q_user_purchases"]
+#        - STORAGE_DIR=/storage
 #      networks:
 #        - coffee_analysis_net
 networks:
