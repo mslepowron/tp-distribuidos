@@ -1,1 +1,10 @@
 /transactions_202410.csv
+venv/
+.env/
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+*.log
+*.tmp
