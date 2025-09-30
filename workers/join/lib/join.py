@@ -300,6 +300,7 @@ class StoreJoin(Join):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
+                logger.info("Todo enviado")
                 self._forward_eof(header, routing_keys=[])  # fanout
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return

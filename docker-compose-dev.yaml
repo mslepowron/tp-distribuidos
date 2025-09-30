@@ -5,7 +5,6 @@ services:
       dockerfile: rabbitmq.dockerfile
     ports:
       - 15672:15672
-      #- "5672:5672" # conexión AMQP (que usa Pika por ejemplo, pero creo que si dockerizamos todo y creamos una red del tp esto no es necesario)
     networks:
       - coffee_analysis_net
   app_controller:
@@ -44,6 +43,7 @@ services:
     environment:
       - FILTER_TYPE=Hour
       - QUEUE_NAME=filter_hour_q
+      # - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
       - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
       - OUTPUT_EXCHANGE=filter_hour_ex
       - OUTPUT_RKS=[]
@@ -77,6 +77,23 @@ services:
       - INPUT_BINDINGS=[["input_file_ex","direct","menu_items"],["filter_year_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=menu_items_ex
       - OUTPUT_RKS=["menu_items"]
+      - STORAGE_DIR=/storage
+    volumes:
+      - ./storage:/storage
+    networks:
+      - coffee_analysis_net
+  join_stores:
+    build:
+      context: .
+      dockerfile: workers/join/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - JOIN_TYPE=Store
+      - QUEUE_NAME=join_store_q
+      - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","fanout",""]]
+      - OUTPUT_EXCHANGE=join_stores_ex
+      - OUTPUT_RKS=[]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage

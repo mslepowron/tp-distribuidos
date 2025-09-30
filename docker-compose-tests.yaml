@@ -1,0 +1,11 @@
+services:
+  rabbitmq-test:
+    context: ./middleware/rabbitmq
+    dockerfile: rabbitmq.dockerfile
+    container_name: rabbitmq-test
+    ports:
+      - "5672:5672" #Puertos para conectar con AMQP cliente pika para los tests
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
