@@ -109,27 +109,30 @@ class TopSellingItems(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
 
-    def update(self, item, count):
+    def update(self, ym, item, count):
         # Caso: aún no llegué a n elementos
         if len(self.top) < self.top_lenght:
-            self.top.append((item, count))
-            self.top.sort(key=lambda x: x[1], reverse=True)
+            self.top.append((ym, item, count))
+            # hago el sort con el numero 2 porque es donde se encuentra el count
+            self.top.sort(key=lambda x: x[2], reverse=True)
             return
 
         # Caso: lista llena, comparo con el minimo (ultimo elemento)
         if count > self.top[-1][1]:
-            self.top[-1] = (item, count)
-            self.top.sort(key=lambda x: x[1], reverse=True)
+            self.top[-1] = (ym, item, count)
+            # hago el sort con el numero 2 porque es donde se encuentra el count
+            self.top.sort(key=lambda x: x[2], reverse=True)
 
     def get_top(self):
         return self.top
     
-    def to_csv(self):
+    def to_csv(self, toped):
         """Convierte el top a formato CSV en un string"""
-        lines = []
-        for item, count in self.top:
-            lines.append(f"{2024},{item},{count}")
-        return "\n".join(lines)
+        result_rows = [
+                {"year_month_created_at": ym, "item_name": item, "selling_qty": count}
+                for ym, item, count in toped
+                ]
+        return result_rows
 
     def callback(self, ch, method, properties, body):
         try:
@@ -139,10 +142,7 @@ class TopSellingItems(Top):
             if header.fields.get("message_type") == "EOF":
                 toped = self.get_top()
                 #csv_str = self.to_csv()
-                result_rows = [
-                    {"year_month_created_at": "2024-10", "item_name": item, "selling_qty": count}
-                    for item, count in toped
-                ]
+                result_rows = self.to_csv(toped)
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
                 header.fields["stage"] = "TopSellingItems"
                 logger.info(f"RESULT ROWS: {result_rows}")
@@ -153,11 +153,12 @@ class TopSellingItems(Top):
                 return
 
             for row in rows:
-                item = row.get("item_name")       # clave del row (ejemplo)
-                count = row.get("selling_qty", 1)     # cantidad (ejemplo)
+                ym = row.get("year_month_created_at")       
+                item = row.get("item_name")       
+                count = row.get("selling_qty", 1)     
                 # logger.info(f"row {item}: {count}")
-                if item is not None and count is not None:
-                    self.update(item, count)
+                if ym is not None and item is not None and count is not None:
+                    self.update(ym, item, count)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
