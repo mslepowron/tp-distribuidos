@@ -141,7 +141,6 @@ class TopSellingItems(Top):
 
             if header.fields.get("message_type") == "EOF":
                 toped = self.get_top()
-                #csv_str = self.to_csv()
                 result_rows = self.to_csv(toped)
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
                 header.fields["stage"] = "TopSellingItems"
@@ -166,68 +165,64 @@ class TopSellingItems(Top):
             logger.error(f"TopSellingItems error: {e}")
 
 
-class TopRevenueGeneratinItems(Top):
+class TopRevenueGeneratingItems(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
 
-    def define_schema(self, header):
-        try:
-            schema = header.fields["schema"] 
-            raw_fieldnames = schema.strip()[1:-1]
-            parts = raw_fieldnames.split(",")
-
-            # limpiar cada valor
-            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
-
-            if header.fields["source"].startswith("transactions"): 
-                fieldnames.remove("created_at")
-                fieldnames.remove("store_id")
-                fieldnames.remove("user_id")
-           
-            return fieldnames
-        except KeyError:
-            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
-
-    def update(self, item, count):
+    def update(self, ym, item, suma):
         # Caso: aún no llegué a n elementos
         if len(self.top) < self.top_lenght:
-            self.top.append((item, count))
-            self.top.sort(key=lambda x: x[1], reverse=True)
+            self.top.append((ym, item, suma))
+            # hago el sort con el numero 2 porque es donde se encuentra el suma
+            self.top.sort(key=lambda x: x[2], reverse=True)
             return
 
         # Caso: lista llena, comparo con el minimo (ultimo elemento)
-        if count > self.top[-1][1]:
-            self.top[-1] = (item, count)
-            self.top.sort(key=lambda x: x[1], reverse=True)
+        if suma > self.top[-1][1]:
+            self.top[-1] = (ym, item, suma)
+            # hago el sort con el numero 2 porque es donde se encuentra el suma
+            self.top.sort(key=lambda x: x[2], reverse=True)
 
     def get_top(self):
         return self.top
+    
+    def to_csv(self, toped):
+        """Convierte el top a formato CSV en un string"""
+        result_rows = [
+                {"year_month_created_at": ym, "item_name": item, "profit_sum": sum}
+                for ym, item, sum in toped
+                ]
+        return result_rows
 
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
+            logger.info(f"recibo rows")
 
             if header.fields.get("message_type") == "EOF":
                 toped = self.get_top()
-                logger.info(f"Top {self.top_lenght}: {toped}")
+                result_rows = self.to_csv(toped)
+                header.fields["schema"] = str(["year_month_created_at", "item_name", "profit_sum"])
+                header.fields["stage"] = "TopRevenueGeneratingItems"
+                logger.info(f"RESULT ROWS: {result_rows}")
+                self._send_rows(header, result_rows, self.output_rk)
+                self._forward_eof(header, "TopRevenueGeneratingItems", routing_keys=self.output_rk)
 
-                self._send_rows(header, toped, self.output_rk) #envio el top
-
-                self._forward_eof(header, "TopRevenue",routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
             for row in rows:
-                item = row.get("item_name")       # clave del row (ejemplo)
-                count = row.get("profit_sum", 1)     # cantidad (ejemplo)
-                if item is not None and count is not None:
-                    self.top.update(item, count)
+                ym = row.get("year_month_created_at")       
+                item = row.get("item_name")       
+                sum = row.get("profit_sum", 1)     
+                # logger.info(f"row {item}: {sum}")
+                if ym is not None and item is not None and sum is not None:
+                    self.update(ym, item, sum)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            # self._send_rows(header, toped, routing_keys=out_rk)
 
         except Exception as e:
-            logger.error(f"TopRevenueItems error: {e}")
+            logger.error(f"TopRevenueGeneratingItems error: {e}")
 
 
 

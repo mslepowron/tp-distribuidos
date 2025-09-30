@@ -110,20 +110,20 @@ services:
       - OUTPUT_RKS=["month_quantity"]
     networks:
       - coffee_analysis_net
-  # reduce_profit:
-  #   build:
-  #     context: .
-  #     dockerfile: workers/reduce/Dockerfile
-  #   depends_on:
-  #     - rabbitmq
-  #   environment:
-  #     - REDUCE_TYPE=profit
-  #     - QUEUE_NAME=reduce_profit_q
-  #     - INPUT_BINDINGS=[["map_year_month_ex","direct","q_month_top_qty"]]
-  #     - OUTPUT_EXCHANGE=reduce_profit_ex
-  #     - OUTPUT_RKS=["q_month_top_qty"]
-  #   networks:
-  #     - coffee_analysis_net
+  reduce_profit:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - REDUCE_TYPE=profit
+      - QUEUE_NAME=reduce_profit_q
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
+      - OUTPUT_EXCHANGE=reduce_profit_ex
+      - OUTPUT_RKS=["month_profit"]
+    networks:
+      - coffee_analysis_net
   top_selling_items:
     build:
       context: .
@@ -136,6 +136,20 @@ services:
       - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
       - OUTPUT_EXCHANGE=results_ex
       - OUTPUT_RKS=["q_month_top_qty"]
+    networks:
+      - coffee_analysis_net
+  top_revenue_generating_items:
+    build:
+      context: .
+      dockerfile: workers/top/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - TOP_TYPE=TopRevenueGeneratinItems
+      - QUEUE_NAME=top_generating_items_q
+      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_month_top_rev"]
     networks:
       - coffee_analysis_net
 #    reduce_tpv:

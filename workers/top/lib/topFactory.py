@@ -1,4 +1,4 @@
-from .top import Top,TopSellingItems, TopRevenueGeneratinItems
+from .top import Top,TopSellingItems, TopRevenueGeneratingItems
 
 
 class TopFactory:
@@ -7,6 +7,6 @@ class TopFactory:
         if top_type == "TopSellingItems":
             return TopSellingItems(mw_in, mw_out, output_exchange, output_rks, input_bindings)
         elif top_type == "TopRevenueGeneratinItems":
-            return TopRevenueGeneratinItems(mw_in, mw_out, output_exchange, output_rks, input_bindings)
+            return TopRevenueGeneratingItems(mw_in, mw_out, output_exchange, output_rks, input_bindings)
         else:
             raise ValueError(f"Invalid top type: {top_type}")
