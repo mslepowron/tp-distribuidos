@@ -164,7 +164,7 @@ class HourFilter(Filter):
                 fieldnames.remove("created_at")
                 fieldnames.remove("store_id")
                 fieldnames.remove("user_id")
-            elif header.fields["source"].startswith("tran_join"): 
+            elif header.fields["source"].startswith("store_join"): 
                 fieldnames.remove("transaction_id")
            
             return fieldnames
@@ -189,6 +189,9 @@ class HourFilter(Filter):
                         row.pop("created_at", None)
                         row.pop("store_id", None)
                         row.pop("user_id", None)
+                    elif header.fields["source"].startswith("store_join"):
+                        row.pop("transaction_id", None)
+                        
                     filtered.append(row)
 
             self._send_rows(header, filtered, routing_keys=[])  # fanout

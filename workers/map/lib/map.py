@@ -160,12 +160,28 @@ class MapYearHalf(Map):
     def start_map(self):
         self.mw.start_consuming(self.callback)
 
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"]
+            raw_fieldnames = schema.strip()[1:-1]
+
+            # dividir por coma
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            fieldnames.append("year_half_created_at")
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
                 # Propago EOF a ambas RKs para completar el “tipo”
+                logger.info(f"Envio todo")
                 self._forward_eof(header, "MapYearHalf", routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
@@ -173,6 +189,7 @@ class MapYearHalf(Map):
             mapped = []
 
             for row in rows:
+                logger.info(f"ROW: {row}")
                 try:
                     date_part = row["created_at"].split(" ")[0]  
                     year, month, _ = date_part.split("-")        # "2024", "10", "01"

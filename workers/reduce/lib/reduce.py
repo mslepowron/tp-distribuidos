@@ -333,12 +333,44 @@ class TpvReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.schema_out_fields = ["year_half_created_at", "store_name", "tpv"]
-        self.aggregates = {}  # key: (store_name, year_half_created_at) → sum(final_amount)
+        self.storage_file = Path("storage/reduce_tpv.csv")
         self.eofs_received = 0
         self.eofs_expected = 1
 
+        # inicializamos archivo vacío
+        self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+        if self.storage_file.exists():
+            self.storage_file.unlink()
+
     def start_reducer(self):
         self.mw.start_consuming(self.callback)
+
+    def _update_storage(self, yh, store, final_amount):
+        """Lee el archivo y actualiza la suma para (yh,store)."""
+        rows = {}
+        if self.storage_file.exists():
+            with open(self.storage_file, newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rows[(r["year_half_created_at"], r["store_name"])] = float(r["profit_sum"])
+
+        # actualizar acumulado
+        key = (yh, store)
+        old_val = rows.get(key, 0.0)
+        rows[key] = old_val + final_amount
+        logger.debug(f"[TpvReducer] Update ({yh}, {store}): {old_val} -> {rows[key]}")
+
+        # reescribir archivo con todos los acumulados
+        with open(self.storage_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=self.schema_out_fields)
+            writer.writeheader()
+            for (yh, store), tpv in rows.items():
+                writer.writerow({
+                    "year_half_created_at": yh,
+                    "store_name": store,
+                    "tpv": round(tpv, 2)
+                })
+        logger.info(f"[TpvReducer] Storage reescrito con {len(rows)} filas.")
 
     def callback(self, ch, method, properties, body):
         try:
@@ -346,20 +378,23 @@ class TpvReducer(Reduce):
 
             if header.fields.get("message_type") == "EOF":
                 self.eofs_received += 1
+                logger.info(f"[TpvReducer] EOF recibido ({self.eofs_received}/{self.eofs_expected})")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 if self.eofs_received >= self.eofs_expected:
                     self._emit_result(header)
-                    self._forward_eof(header, "TPVReducer", self.output_rk)
+                    self._forward_eof(header, "TpvReducer", self.output_rk)
                 return
 
+            # procesar filas e ir actualizando archivo
             for row in rows:
-                store = row.get("store_name") or row.get("store_id")
-                semester = row.get("year_half_created_at")
-                if not store or not semester:
+                logger.info(f"[TpvReducer] Fila : {row}")
+                yh = row.get("year_half_created_at")
+                store = row.get("store_name")
+                if not yh or not store:
+                    logger.warning(f"[TpvReducer] Fila inválida: {row}")
                     continue
-                amount = float(row.get("final_amount") or 0.0)
-                key = (store, semester)
-                self.aggregates[key] = self.aggregates.get(key, 0.0) + amount
+                final_amount = float(row.get("final_amount") or 0.0)
+                self._update_storage(yh, store, final_amount)
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -367,15 +402,14 @@ class TpvReducer(Reduce):
             logger.error(f"Error en TpvReducer: {e}")
 
     def _emit_result(self, header):
-        result_rows = [
-            {
-                "year_half_created_at": semester,
-                "store_name": store,
-                "tpv": round(amount, 2)
-            }
-            for (store, semester), amount in self.aggregates.items()
-        ]
-        header.fields["schema"] = str(self.schema_out_fields)
-        header.fields["stage"] = "ReduceTPV"
+        result_rows = []
+        if self.storage_file.exists():
+            with open(self.storage_file, newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    result_rows.append(r)
+        logger.info(f"[TpvReducer] Emisión final con {len(result_rows)} filas.")
 
+        header.fields["schema"] = str(self.schema_out_fields)
+        header.fields["stage"] = "ReduceTpv"
         self._send_rows(header, "tpv_reduce", result_rows, routing_keys=self.output_rk)

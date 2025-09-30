@@ -44,7 +44,7 @@ services:
       - FILTER_TYPE=Hour
       - QUEUE_NAME=filter_hour_q
       # - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
-      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
+      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","fanout",""]]
       - OUTPUT_EXCHANGE=filter_hour_ex
       - OUTPUT_RKS=[]
     depends_on:
@@ -91,7 +91,7 @@ services:
     environment:
       - JOIN_TYPE=Store
       - QUEUE_NAME=join_store_q
-      - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","fanout",""]]
+      - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","direct","transactions"]]
       - OUTPUT_EXCHANGE=join_stores_ex
       - OUTPUT_RKS=[]
       - STORAGE_DIR=/storage
@@ -111,6 +111,20 @@ services:
       - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
       - OUTPUT_EXCHANGE=map_year_month_ex
       - OUTPUT_RKS=["quantity", "profit"]
+    networks:
+      - coffee_analysis_net
+  map_year_half:
+    build:
+      context: .
+      dockerfile: workers/map/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - MAP_TYPE=YearHalf
+      - QUEUE_NAME=map_year_half_q
+      - INPUT_BINDINGS=[["join_stores_ex","fanout",""]]
+      - OUTPUT_EXCHANGE=map_year_half_ex
+      - OUTPUT_RKS=["map_half"]
     networks:
       - coffee_analysis_net
   reduce_quantity:
@@ -139,6 +153,20 @@ services:
       - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
       - OUTPUT_EXCHANGE=reduce_profit_ex
       - OUTPUT_RKS=["month_profit"]
+    networks:
+      - coffee_analysis_net
+  reduce_tpv:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - REDUCE_TYPE=tpv
+      - QUEUE_NAME=reduce_tpv_q
+      - INPUT_BINDINGS=[["map_year_half_ex","direct","map_half"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_semester_tpv"]
     networks:
       - coffee_analysis_net
   top_selling_items:

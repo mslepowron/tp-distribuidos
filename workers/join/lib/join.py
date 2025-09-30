@@ -295,27 +295,133 @@ class MenuJoin(Join):
                 yield batch
 
 class StoreJoin(Join):
+    REQUIRED_STREAMS = ("stores", "transactions")
+    OUTPUT_FIELDS = ["transaction_id", "created_at", "final_amount", "store_id", "store_name" ]
+    OUTPUT_FILE_BASENAME = "store_join.csv"
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("store_id")
+            fieldnames.append("store_name")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
+            
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+            message_schema = header.fields.get("schema")
 
-            if header.fields.get("message_type") == "EOF":
-                logger.info("Todo enviado")
-                self._forward_eof(header, routing_keys=[])  # fanout
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+            # EOF
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                if source.startswith("stores"):
+                    self.source_file_index = self._build_menu_index()
+                    self.source_file_closed = True
+
+                    for batch in self._read_batches(self.files["transactions"], 1000): #TODO: Esta hardcodeado el batch
+                        joined = self._join_batch(batch)
+                        self._send_rows(header, "store_join", joined, self.output_rk)
+
+                elif source.startswith("transactions"):
+                    if self.source_file_closed:
+                        self._forward_eof(header, "store_join", routing_keys=self.output_rk)
+
+                if ch is not None and hasattr(method, "delivery_tag"):
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            filtered = []
-            for row in rows:
-                hour = int(row["created_at"].split(" ")[1].split(":")[0])
-                if 6 <= hour < 23:
-                    filtered.append(row)
+            # DATA
+            if source.startswith("stores"):
+                self._append_rows(self.files["stores"], rows)
 
-            self._send_rows(header, filtered, routing_keys=[])  # fanout
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            elif source.startswith("transactions"):
+                if not getattr(self, "source_file_closed", False):
+                    self._append_rows(self.files["transactions"], rows)
+                else:
+                    joined = self._join_batch(rows)
+                    self._send_rows(header, "store_join", joined, self.output_rk)
+
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"HourFilter error: {e}")
+            logger.error(f"MenuJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def _build_menu_index(self) -> Dict[str, str]:
+        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
+        menu_rows = self._read_rows(self.files["stores"])
+
+        def pick_store_id(row):
+            return row.get("store_id") or row.get("id") or ""
+
+        def pick_store_name(row):
+            raw_name = row.get("store_name") or row.get("name") or ""
+            # Si es un string que parece lista, extraigo el primer elemento
+            try:
+                parsed = ast.literal_eval(raw_name)
+                if isinstance(parsed, list) and parsed:
+                    return parsed[0]
+            except (ValueError, SyntaxError):
+                pass
+            return raw_name
+
+        index = {}
+        for m in menu_rows:
+            mid = pick_store_id(m)
+            nm = pick_store_name(m)
+            if mid and nm:
+                index[mid] = nm
+        logger.info(f"Store index construido con {len(index)} items")
+        return index
+
+    def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menú indexado """
+        if not self.source_file_index:
+            return []
+        out = []
+        for t in trx_rows:
+            store_id = t.get("store_id") or t.get("id") or ""
+            if not store_id:
+                continue
+            out.append({
+                "transaction_id": t.get("transaction_id"),
+                "created_at": t.get("created_at", ""),
+                "store_id": store_id,
+                "final_amount": t.get("final_amount", t.get("amount", "")),
+                "store_name": self.source_file_index.get(store_id, ""),
+            })
+        return out
+
+    def _read_batches(self, file_path: Path, batch_size: int):
+        """ Itera el CSV en batches para no cargar todo en memoria """
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            return
+        with file_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
 
 class UserJoin(Join):
     def callback(self, ch, method, properties, body):
