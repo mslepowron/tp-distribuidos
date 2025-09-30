@@ -76,7 +76,7 @@ services:
       - QUEUE_NAME=join_menu_q
       - INPUT_BINDINGS=[["input_file_ex","direct","menu_items"],["filter_year_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=menu_items_ex
-      - OUTPUT_RKS=["menu"]
+      - OUTPUT_RKS=["menu_items"]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage
@@ -119,7 +119,7 @@ services:
 #      environment:
 #        - REDUCE_TYPE=tpv
 #        - QUEUE_NAME=reduce_tpv_q
-#        - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]] #aca va el de desp del map
+#        - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]]
 #        - OUTPUT_EXCHANGE=reduce_tpv_ex
 #        - OUTPUT_RKS=["q_semester_tpv"]
 #      networks:

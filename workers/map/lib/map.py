@@ -79,17 +79,17 @@ class Map:
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
-    def _forward_eof(self, header, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None):
         try:
             out_header = Header({
-                    "message_type": header.fields["message_type"],
-                    "query_id": header.fields["query_id"],
-                    "stage": stage,
-                    "part": header.fields["part"],
-                    "seq": header.fields["seq"],
-                    "schema": header.fields["schema"],
-                    "source": header.fields["source"],
-                })
+                "message_type": header.fields["message_type"],
+                "query_id": header.fields["query_id"],
+                "stage": stage,
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": header.fields["schema"],
+                "source": header.fields["source"],
+            })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
@@ -104,7 +104,7 @@ class Map:
 # ----------------- SUBCLASES -----------------
 
 class MapYearMonth(Map):
-    def start_filter(self):
+    def start_map(self):
         self.mw.start_consuming(self.callback)
 
     def define_schema(self, header):
@@ -116,10 +116,11 @@ class MapYearMonth(Map):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            if header.fields["source"].startswith("transactions"): 
+            if header.fields["source"].startswith("menu_join"): 
                 fieldnames.remove("created_at")
+                fieldnames.append("year_month_created_at")
             # elsif:
-           
+            logger.info(f"SHEMAAA --->{fieldnames}")
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
@@ -127,10 +128,9 @@ class MapYearMonth(Map):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-
             if header.fields.get("message_type") == "EOF":
                 # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, routing_keys=self.output_rk)
+                self._forward_eof(header, "MapYearMonth", routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
@@ -142,6 +142,8 @@ class MapYearMonth(Map):
                     year_month = "-".join(date_part.split("-")[:2])  # [2024,10] -> 2024-10
 
                     row["year_month_created_at"] = year_month
+                    if header.fields["source"].startswith("menu_join"):
+                        row.pop("created_at", None)
                     mapped.append(row)
                 except Exception as e:
                     logger.warning(f"No se pudo mapear fila {row}: {e}")
@@ -154,7 +156,7 @@ class MapYearMonth(Map):
 
 
 class MapYearHalf(Map):
-    def start_filter(self):
+    def start_map(self):
         self.mw.start_consuming(self.callback)
 
     def callback(self, ch, method, properties, body):
@@ -163,7 +165,7 @@ class MapYearHalf(Map):
 
             if header.fields.get("message_type") == "EOF":
                 # Propago EOF a ambas RKs para completar el “tipo”
-                self._forward_eof(header, routing_keys=self.output_rk)
+                self._forward_eof(header, "MapYearHalf", routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
