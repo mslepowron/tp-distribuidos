@@ -1,22 +1,23 @@
 import logging
-import logging
-from uuid import uuid4
 from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
-from communication.protocol.message import Header, HeaderError, PayloadError
-from communication.protocol.schemas import RAW_SCHEMAS
+from communication.protocol.message import Header
+from communication.protocol.schemas import CLEAN_SCHEMAS
 
 logger = logging.getLogger("filter")
 
 
 class Filter:
-    def __init__(self, mw, result_mw, next_worker, filter_type='Year'):
-        self.next_worker = next_worker
-        self.type = filter_type
-        self.mw = mw
-        self.result_mw = result_mw
-        self.has_sent_any_result = False
-    
+    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings):
+        self.mw = mw_in
+        self.result_mw = mw_out
+        self.output_exchange = output_exchange
+        self.input_bindings = input_bindings
+        if isinstance(output_rks, str):
+            self.output_rk = [output_rks] if output_rks else []
+        else:
+            self.output_rk = output_rks or []
+
     def start(self):
         try:
             logger.info("Waiting for messages...")
@@ -24,11 +25,10 @@ class Filter:
         except KeyboardInterrupt:
             logger.info("Shutting down consumer...")
             self.mw.stop_consuming()
-            self.close_mw()
+            self._close_mw()
         except Exception as e:
             logger.error(f"Error durante consumo de mensajes: {e}")
-            self.close_mw()
-            # no hay que cerrar la de result?
+            self._close_mw()
 
     def _close_mw(self):
         try:
@@ -38,108 +38,184 @@ class Filter:
             logger.warning(f"No se pudo cerrar correctamente la conexion: {e}")
 
     def start_filter(self):
-        if self.type == 'Amount':
-            self.mw.start_consuming(self.callback_filter_amount, queues=["filters_amount"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
-        elif self.type == 'Year':
-            self.mw.start_consuming(self.callback_filter_year, queues=["filters_year"]) #Esta cola es especifa de este filter. Pero como hay un exchange no se si hay que nombrar la cola
-        elif self.type == 'Hour':
-            self.mw.start_consuming(self.callback_filter_hour, queues=["filters_hour"])
-        else:
-            logger.error(f"Non valid filter type: {self.type}")
+        # """Método abstracto, lo redefine cada hijo."""
+        raise NotImplementedError
 
-
-    def callback_filter_year(self, ch, method, properties, body):
-        filtered_rows = []
+    def define_schema(self, header):
         try:
-            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            is_eof = self.handle_EOF(body, header)
-            if not is_eof:
+            schema = header.fields["schema"]
+            raw_fieldnames = schema.strip()[1:-1]
 
-                for row in rows:
-                    year = int(row["created_at"].split("-")[0])
-                    if year in [2024, 2025]:
-                        filtered_rows.append(row)
+            # dividir por coma
+            parts = raw_fieldnames.split(",")
 
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                self.send_to_next_step(filtered_rows, header)
+            # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+
+    def _send_rows(self, header, rows, routing_keys):
+        if not rows:
+            return
+        try:
+            schema = self.define_schema(header)
+            out_header = Header({
+                "message_type": header.fields["message_type"],
+                "query_id": header.fields["query_id"],
+                "stage": "FilterYear",
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": schema,
+                "source": header.fields["source"],
+            })
+            payload = serialize_message(out_header, rows, schema)
+            rks = self.output_rk if routing_keys is None else routing_keys
+            if not rks:  #caso fanout; aca nos aplica para el hours
+                self.result_mw.send_to(self.output_exchange, "", payload)
             else:
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-
+                for rk in rks:
+                    self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
-            logger.error(f"Error procesando mensaje: {e}")
+            logger.error(f"Error enviando resultado: {e}")
     
-    def callback_filter_amount(self, ch, method, properties, body):
-        filtered_rows = []
+    def _forward_eof(self, header, stage, routing_keys=None):
         try:
-            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            is_eof = self.handle_EOF(body, header)
-            if not is_eof:
-
-                for row in rows:
-                    final_amount = float(row["final_amount"]) if row["final_amount"] else 0.0
-                    if final_amount > 75:
-                        # almaceno fila del batch
-                        filtered_rows.append(row)
-                        
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                self.send_to_next_step(filtered_rows, header)
+            out_header = Header({
+                "message_type": header.fields["message_type"],
+                "query_id": header.fields["query_id"],
+                "stage": stage,
+                "part": header.fields["part"],
+                "seq": header.fields["seq"],
+                "schema": header.fields["schema"],
+                "source": header.fields["source"],
+            })
+            eof_payload = serialize_message(out_header, [], header.fields["schema"])
+            rks = self.output_rk if routing_keys is None else routing_keys
+            if not rks:  # fanout
+                self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
+                for rk in rks:
+                    self.result_mw.send_to(self.output_exchange, rk, eof_payload)
+        except Exception as e:
+            logger.error(f"Error reenviando EOF: {e}")
+
+# ----------------- SUBCLASES -----------------
+
+class YearFilter(Filter):
+    def start_filter(self):
+        self.mw.start_consuming(self.callback)
+
+    def callback(self, ch, method, properties, body):
+        try:
+            header, rows = deserialize_message(body)
+
+            if header.fields.get("message_type") == "EOF":
+                source = header.fields.get("source", "")
+                if source.startswith("transactions"):
+                # Propago EOF a ambas RKs para completar el “tipo”
+                    routing_keys=["transactions"]
+                    self._forward_eof(header, "FilterYear", routing_keys)
+                    logger.info(f"EOF for: {source} sent to routing key: {routing_keys}")
+                else:
+                    routing_keys=["transaction_items"]
+                    self._forward_eof(header, "FilterYear", routing_keys)
+                    logger.info(f"EOF for: {source} sent to routing key: {routing_keys}")
                 ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+            filtered = []
+
+            for row in rows:
+                year = int(row["created_at"].split("-")[0])
+                if year in (2024, 2025):
+                    filtered.append(row)
+
+            # Determino RK de salida segun cual es el archivo que me llego
+            source = header.fields.get("source", "")
+            if source.startswith("transaction_items") or method.routing_key.startswith("transaction_items"):
+                out_rk = ["transaction_items"]
+                logger.info(f"out_rk selected: transaction_items for source: {source}")
+            else:
+                out_rk = ["transactions"]
+                logger.info(f"out_rk selected: transactions for source: {source}")
+
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            self._send_rows(header, filtered, routing_keys=out_rk)
 
         except Exception as e:
-            logger.error(f"Error procesando mensaje: {e}")
+            logger.error(f"YearFilter error: {e}")
 
-    
-    def callback_filter_hour(self, ch, method, properties, body):
-        filtered_rows = []
+
+class HourFilter(Filter):
+    def start_filter(self):
+        self.mw.start_consuming(self.callback)
+
+    def define_schema(self, header):
         try:
-            header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-            is_eof = self.handle_EOF(body, header)
-            if not is_eof:
-            
-                for row in rows:
-                    hour = int(row["created_at"].split(" ")[1].split(":")[0])
-                    if hour >= 6 and hour < 23:
-                        filtered_rows.append(row)
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
 
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            if header.fields["source"].startswith("transactions"): 
+                fieldnames.remove("created_at")
+                fieldnames.remove("store_id")
+                fieldnames.remove("user_id")
+           
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+    def callback(self, ch, method, properties, body):
+        try:
+            header, rows = deserialize_message(body)
+
+            if header.fields.get("message_type") == "EOF":
+                self._forward_eof(header, "FilterHour",routing_keys=[])  # fanout
                 ch.basic_ack(delivery_tag=method.delivery_tag)
-                self.send_to_next_step(filtered_rows, header)
-            else:
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
+            filtered = []
+            for row in rows:
+                hour = int(row["created_at"].split(" ")[1].split(":")[0])
+                if 6 <= hour < 23:
+                    if header.fields["source"].startswith("transactions"):
+                        row.pop("created_at", None)
+                        row.pop("store_id", None)
+                        row.pop("user_id", None)
+                    filtered.append(row)
+
+            self._send_rows(header, filtered, routing_keys=[])  # fanout
+            ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"Error procesando mensaje: {e}")
+            logger.error(f"HourFilter error: {e}")
 
+class AmountFilter(Filter):
+    def start_filter(self):
+        self.mw.start_consuming(self.callback)
 
+    def callback(self, ch, method, properties, body):
+        try:
+            header, rows = deserialize_message(body)
 
-    def send_to_next_step(self, filtered_rows, header):
-         if filtered_rows:
-            try:
-                # construir nuevo header
-                result_header = Header({
-                    "message_type": header.fields["message_type"],
-                    "query_id": header.fields["query_id"],
-                    "stage": self.type,
-                    "part": header.fields["part"],
-                    "seq": header.fields["seq"],
-                    "schema": header.fields["schema"],
-                    "source": header.fields["source"]
-                })
-                # serializar correctamente
-                schema_name = header.fields["schema"]
-                schema_fields = RAW_SCHEMAS[schema_name]
-                csv_bytes = serialize_message(result_header, filtered_rows, schema_fields)
+            if header.fields.get("message_type") == "EOF":
+                self._forward_eof(header, "Results", routing_keys=["q_amount_75_trx"])
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
 
-                self.result_mw.send(csv_bytes, route_key=self.next_worker)
-            except Exception as e:
-                logger.error(f"Error enviando resultado: {e}")
+            filtered = []
+            for row in rows:
+                final_amount = float(row.get("final_amount") or 0.0)
+                if final_amount >= 75.0:
+                    filtered.append(row)
 
-    def handle_EOF(self, body, header):
-        if header.fields.get("message_type") == "EOF":
-            logger.info("All messages recieved. Sending EOF...")
-            self.result_mw.send(body, route_key=self.next_worker)
-            logger.info("Mensaje EOF reenviado al siguiente paso")
-            return True
-        return False
+            self._send_rows(header, filtered, routing_keys=["q_amount_75_trx"])
+            ch.basic_ack(delivery_tag=method.delivery_tag)
 
- 
+        except Exception as e:
+            logger.error(f"AmountFilter error: {e}")
+

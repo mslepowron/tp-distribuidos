@@ -15,7 +15,7 @@ class PayloadError(ProtocolError):
 VALID_QUERY_IDS = {
     "q_amount_75_tx",
     "q_month_top_qty",
-    "q_month_top_review",
+    "q_month_top_rev",
     "q_semester_tpv",
     "q_top3_birthdays"
 }
@@ -26,8 +26,8 @@ HEADER_KEYS = (
     "stage", # etapa de la consulta (ej "filter", "map", etc)
     "part", # nombre del archivo
     "seq", # numero de secuencia del batch
-    "schema", 
-    "source" # worker
+    "schema", #que archivo es
+    "source" # de que archivo viene el mensaje
 )
 
 MESSAGE_TYPES = {"DATA", "EOF"}

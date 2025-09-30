@@ -1,0 +1,331 @@
+item_id,item_name
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+7,Hot Chocolate
+8,Matcha Latte
+1,['Espresso']
+2,['Americano']
+3,['Latte']
+4,['Cappuccino']
+5,['Flat White']
+6,['Mocha']
+7,['Hot Chocolate']
+8,['Matcha Latte']
+1,['Espresso']
+2,['Americano']
+3,['Latte']
+4,['Cappuccino']
+5,['Flat White']
+6,['Mocha']
+7,['Hot Chocolate']
+8,['Matcha Latte']
+1,['Espresso']
+2,['Americano']
+3,['Latte']
+4,['Cappuccino']
+5,['Flat White']
+6,['Mocha']
+7,['Hot Chocolate']
+8,['Matcha Latte']
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,,,,,,,,,,,,
+2,,,,,,,,,,,,
+3,,,,,,,,,,,,
+4,,,,,,,,,,,,
+5,,,,,,,,,,,,
+6,,,,,,,,,,,,
+7,,,,,,,,,,,,
+8,,,,,,,,,,,,
+1,,,,,,,,,,,,
+2,,,,,,,,,,,,
+3,,,,,,,,,,,,
+4,,,,,,,,,,,,
+5,,,,,,,,,,,,
+6,,,,,,,,,,,,
+7,,,,,,,,,,,,
+8,,,,,,,,,,,,
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte
+1,Espresso
+2,Americano
+3,Latte
+4,Cappuccino
+5,Flat White
+6,Mocha
+7,Hot Chocolate
+8,Matcha Latte

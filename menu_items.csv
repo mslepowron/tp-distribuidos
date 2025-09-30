@@ -1,0 +1,9 @@
+item_id,item_name,category,price,is_seasonal,available_from,available_to
+1,Espresso,coffee,6.0,False,,
+2,Americano,coffee,7.0,False,,
+3,Latte,coffee,8.0,False,,
+4,Cappuccino,coffee,8.0,False,,
+5,Flat White,coffee,9.0,False,,
+6,Mocha,coffee,9.5,False,,
+7,Hot Chocolate,non-coffee,9.0,False,,
+8,Matcha Latte,non-coffee,10.0,False,,

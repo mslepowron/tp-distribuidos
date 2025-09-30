@@ -2,12 +2,16 @@ import logging
 from uuid import uuid4
 import csv
 import sys
+import os
+import time
+from typing import Dict, List
+import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
-from communication.protocol.schemas import RAW_SCHEMAS
+from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
-
+from initializer import clean_all_files_grouped
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -16,35 +20,50 @@ logger = logging.getLogger("app_controller")
 BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
 CSV_FILE = BASE_DIR / "transactions.csv"
 
+STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
+
 BATCH_SIZE = 5 #TODO> Varialbe de entorno
 
+SCHEMA_BY_RK = {
+    "transactions": "transactions.clean",
+    "transaction_items": "transaction_items.clean",
+    "menu_items": "menu_items.clean",
+    "users": "users.clean",
+    "stores": "stores.clean",
+} #TODO esto desp sacarle el clean? No me convence xq van a ir cambiando los schemas.
+
 class AppController:
-    def __init__(self, host, input_exchange, routing_keys, 
-                 result_exchange, result_queue):
+    def __init__(self, host, input_exchange, input_routing_keys,
+                 result_exchange, result_routing_keys, result_sink_queue):
         self.host = host
+        
         self.input_exchange = input_exchange
-        self.routing_keys = routing_keys
+        self.input_routing_keys = input_routing_keys
+
         self.result_exchange = result_exchange
-        self.result_queue = result_queue
-        self.mw_exchange = None
-        self.result_mw = None
+        self.result_routing_keys = result_routing_keys
+        self.result_sink_queue = result_sink_queue
+
+        self.mw_input = None
+        self.mw_results = None
         self._running = False
 
     def connect_to_middleware(self):
         try:
-            self.mw_exchange = MessageMiddlewareExchange(
+            self.mw_input = MessageMiddlewareExchange(
                 host=self.host,
-                exchange_name=self.input_exchange,
-                exchange_type="direct", #TODO: Esto va a depender de la query creo...
-                route_keys= self.routing_keys
-            )
+                queue_name="app_controller_input",
+                #bindings=[(self.input_exchange, "direct", rk) for rk in self.input_routing_keys]
+            ) #bindings = exchange name, tipo y las routing keys asociadas a donde va a mandar cosas.
 
-            #Exchange con binding a la cola de donde va a recibir los resultados de las queries
+            self.mw_input.ensure_exchange(self.input_exchange, "direct")
+            
+            #Exchange con binding a la cola de donde va a recibir los resultados de las queries desde diferentes
+            #routing keys.
             self.result_mw = MessageMiddlewareExchange(
                 host=self.host,
-                exchange_name=self.result_exchange,
-                exchange_type="direct",
-                route_keys=[self.result_queue]
+                queue_name=self.result_sink_queue,
+                bindings=[(self.result_exchange, "direct", rk) for rk in self.result_routing_keys]
             ) 
         except Exception as e:
             logger.error(f"No se pudo conectar a RabbitMQ: {e}")
@@ -54,100 +73,132 @@ class AppController:
         """Closing middleware connection for graceful shutdown"""
         logger.info("Shutting down AppController gracefully...")
         self._running = False
-        for conn in [self.mw_exchange, self.result_mw]:
+        for conn in [self.mw_input, self.result_mw]:
             if conn:
                 try:
-                    self.mw_exchange.close()
+                    self.mw_input.close()
                     self.result_mw.close()
                     logger.info("Middleware connection closed.")
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
 
+    def _wait_for_queues(self, queue_names, timeout=30):
+        """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                for q in queue_names:
+                    # passive=True: no crea la cola, solo falla si no existe
+                    self.mw_input.channel.queue_declare(queue=q, passive=True)
+                logger.info(f"Ready: all target queues exist: {queue_names}")
+                return True
+            except pika.exceptions.ChannelClosedByBroker:
+                # El broker cierra el canal si la cola no existe en modo passive - reabrimos y reintentamos
+                self.mw_input.channel = self.mw_input.connection.channel()
+                time.sleep(1)
+            except Exception:
+                time.sleep(1)
+        logger.warning(f"Timeout esperando colas {queue_names}; enviando igual")
+        return False
+    
     def run(self):
         self.connect_to_middleware()
         self._running = True
 
+        # time.sleep(10)
+        self._wait_for_queues(["filter_year_q"])
         try:
-            with open(CSV_FILE, newline="") as csvfile: #TODO: El csv file debe ser dinamico, viene como un stream de datos dsde el gateway
-                reader = csv.DictReader(csvfile)
-                batch = []
-                for row in reader:
-                    if not self._running:
-                        break
-                    batch.append(row)
-                    if len(batch) >= BATCH_SIZE:
-                        self.send_batch(batch)
-                        batch = []
+            files_grouped = clean_all_files_grouped()
+            for routing_key, filename, row_iterator in files_grouped:
+                logger.info(f"Procesando archivo {filename} con routing_key={routing_key}")
+                self._send_batches_from_iterator(row_iterator, routing_key)
+                self.send_end_of_file(routing_key=routing_key)
 
-                if batch and self._running:
-                    self.send_batch(batch)
-            self.send_end_of_file()
-
-        except FileNotFoundError:
-            logger.error(f"CSV file {CSV_FILE} not found.")
         except Exception as e:
-            logger.error(f"Error processing CSV: {e}")
+            logger.error(f"Error processing files: {e}")
 
-        def callback(ch, method, properties, body):
+        def callback_results(ch, method, properties, body):
             try:
                 # Deserializar con tu nuevo protocolo
-                header, rows = deserialize_message(body, RAW_SCHEMAS["transactions.raw"])
-                logger.info(f"Header resultado: {header.as_dictionary()}")
+                rk = method.routing_key  # ej: "q_amount_75_tx"
+                logger.info(f"[results:{rk}] len={len(body)} bytes")
+
+                # Elegir el schema por rk si difiere por query dejo hardocdeado de ej transactions.raw:
+                header, rows = deserialize_message(body)
+                logger.info(f"Header: {header.as_dictionary()}")
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
             except Exception as e:
                 logger.error(f"Error deserializando resultado: {e}")
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            finally:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
-        logger.info("Esperando resultados...")
+        logger.info(f"Esperando resultados en queue '{self.result_sink_queue}'...")
         try:
-            self.result_mw.start_consuming(callback, queues=[self.result_queue]) #No me da confianza dejar definido la queue_name en el callback
+            self.result_mw.start_consuming(callback_results)
         except Exception as e:
             logger.error(f"Error consumiendo resultados: {e}")
         finally:
             self.shutdown()
 
-    def send_batch(self, batch):
+    def _send_batches_from_iterator(self, row_iterator, routing_key: str):
+        source = SCHEMA_BY_RK[routing_key]
+        schema = CLEAN_SCHEMAS[source]  # obtener lista de campos del esquema limpio
+        batch = []
+        for row in row_iterator:
+            if not self._running:
+                break
+            batch.append(row)
+            if len(batch) >= BATCH_SIZE:
+                self.send_batch(batch, routing_key, source, schema)
+                batch = []
+        if batch and self._running:
+            self.send_batch(batch, routing_key, source, schema)
+
+    # def send_batch(self, batch, routing_key: str, source: str):
+    def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
         if not self._running or not batch:
             return
         try:
             header_fields = [
                 ("message_type", "DATA"),
-                ("query_id", "q_amount_75_tx"),  # TODO: Cambiar según la query - Esto esta hardcodeado
-                ("stage", "FILTER"),
-                ("part", "transactions.raw"),
+                ("query_id", "q_amount_75_tx"),  # TODO: Creo que no lo vamos a necesitar
+                ("stage", "INIT"),
+                ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
                 ("seq", str(uuid4())),
-                ("schema", "transactions.raw"),
-                ("source", "app_controller")
+                ("schema", schema),
+                ("source", source)
             ]
             header = Header(header_fields)
 
-            message_bytes = serialize_message(header, batch, RAW_SCHEMAS["transactions.raw"])
-            route_key = self.routing_keys[0] if self.routing_keys else ""
-            self.mw_exchange.send(message_bytes, route_key=route_key)
+            message_bytes = serialize_message(header, batch, schema)
+            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
+            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
 
-            logger.info(f"Batch enviado con {len(batch)} filas")
+            logger.info(f"Batch {self.input_exchange}:{routing_key} ({len(batch)} filas)")
 
         except Exception as e:
             logger.error(f"Error enviando batch: {e}")
 
-    def send_end_of_file(self):
+    def send_end_of_file(self, routing_key: str):
         try:
+            schema = []
+            source = SCHEMA_BY_RK[routing_key]
             header_fields = [
                 ("message_type", "EOF"),
                 ("query_id", "q_amount_75_tx"),
-                ("stage", "FILTER"),
+                ("stage", "INIT"),
                 ("part", "transactions.raw"),
                 ("seq", str(uuid4())),
-                ("schema", "transactions.raw"),
-                ("source", "app_controller")
+                ("schema", schema),
+                ("source", source)
             ]
             header = Header(header_fields)
             # Enviamos un mensaje vacío, el filtro lo va a interpretar
-            message_bytes = serialize_message(header, [], RAW_SCHEMAS["transactions.raw"])
-            route_key = self.routing_keys[0] if self.routing_keys else ""
-            self.mw_exchange.send(message_bytes, route_key=route_key)
-            logger.info("Mensaje END_OF_FILE enviado al filtro")
+            message_bytes = serialize_message(header, [], schema)
+            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
+            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
+            logger.info(f"EOF → {self.input_exchange}:{routing_key}")
         except Exception as e:
             logger.error(f"Error enviando END_OF_FILE: {e}")
 

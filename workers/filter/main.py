@@ -1,40 +1,50 @@
+import json
 import logging
 import os
 from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-from lib.filter import Filter
+# from lib.filter import YearFilter, HourFilter, AmountFilter
+from lib.filterFactory import FilterFactory
+
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main")
+logger = logging.getLogger("filter-main")
+
+def parse_json_env(name, default=None):
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        logger.warning(f"Could not parse {name}='{raw}', using default={default}")
+        return default
 
 def main():
     try:
         filter_type = os.getenv("FILTER_TYPE")
-        next_worker = os.getenv("RESULT_QUEUE")
-        mw = MessageMiddlewareExchange(
+        queue_name = os.getenv("QUEUE_NAME", f"{filter_type.lower()}_q")
+
+        input_bindings  = parse_json_env("INPUT_BINDINGS", [])
+        output_exchange = os.getenv("OUTPUT_EXCHANGE", "")
+        output_rks      = parse_json_env("OUTPUT_RKS", [])
+
+        mw_in = MessageMiddlewareExchange(
             host="rabbitmq",
-            exchange_name="filters",
-            exchange_type="direct",
-            route_keys=["filters_year", "filters_hour", "filters_amount"]  # creo que puedo declarar todas pero consumimos solo "year"
+            queue_name=queue_name,
+            bindings=[(ex, ex_type, rk) for ex, ex_type, rk in input_bindings]
         )
-        #result_mw = mw #este year filter se lo pasa al hour filter. Publicamos los resultados en el mismo exchange
-        
-        if next_worker == "coffee_results":
-            result_mw = MessageMiddlewareExchange(
-                host="rabbitmq",
-                exchange_name="results",
-                exchange_type="direct",
-                route_keys=["coffee_results"]  # el app_controller está bindeado a esto
-            )
-        else:
-            result_mw = mw
-            
+
+        mw_out = MessageMiddlewareExchange(
+            host="rabbitmq",
+            queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
+        )
+
+        f = FilterFactory.create(filter_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
+
+        f.start()
+
     except Exception as e:
-        logger.error(f"No se pudo conectar a RabbitMQ: {e}")
-        return
-
-    f = Filter(mw, result_mw, next_worker, filter_type)
-
-    f.start()
+        logger.error(f"Fallo al inicializar filter: {e}")
 
 if __name__ == "__main__":
     main()

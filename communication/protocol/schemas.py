@@ -38,7 +38,7 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
         "store_id", "store_name"
     ],
 
-    "menu_clean": [
+    "menu_items.clean": [
         "item_id", "item_name"
     ],
 
@@ -48,4 +48,4 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
 }
 
 #All schemas
-SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS}
+SCHEMAS: Dict[str, List[str]] = {**RAW_SCHEMAS, **CLEAN_SCHEMAS,}
