@@ -10,8 +10,6 @@ from communication.protocol.message import Header
 
 logger = logging.getLogger("join")
 
-MENU_OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
-
 #TODO: Este output esta hardcodeade para este caso. Habria que hacer algo mas dinamic.
 
 class Join:
@@ -78,12 +76,10 @@ class Join:
 
             # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
-            logger.info(f"SCHEMAAAAAA --> {fieldnames}")
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
     
-
     def _send_rows(self, header, source, rows, routing_keys=None):
         if not rows:
             return
@@ -94,7 +90,6 @@ class Join:
             if not schema or any(s == "" for s in schema):
                 first_row = rows[0]
                 schema = list(first_row.keys())
-                logger.info(f"SCHEMA reconstruido dinámicamente --> {schema}")
 
             normalized_rows = []
             for row in rows:
@@ -125,21 +120,16 @@ class Join:
                 for rk in rks:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
 
-            logger.info(f"Enviado batch de {len(rows)} filas a {self.output_exchange} con rk={rks}")
-            logger.info(f"Header: {out_header.fields}")
-            logger.info(f"Rows: {rows}")
+            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
         except Exception as e:
-            logger.error(f"Error enviando resultado: {e}")
-            logger.error(f"header: {header.fields}")
-            logger.error(f"rows: {rows}")
-    
+            logger.error(f"Error sending results: {e}")
     
     def _forward_eof(self, header, stage, routing_keys=None):
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": header.fields["query_id"],
-                "stage": "JoinMenu",
+                "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema":  header.fields["schema"],
@@ -191,7 +181,7 @@ class MenuJoin(Join):
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
             fieldnames.append("item_name")
-            logger.info(f"SCHEMAAAAAA --> {fieldnames}")
+
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
@@ -199,14 +189,11 @@ class MenuJoin(Join):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-            # logger.info(f"1:SCHEMA EN EL CALL BACK--->{header.fields.get("schema")}  y STAGE {header.fields.get("stage")}")
             
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
             message_schema = header.fields.get("schema")
-
-            logger.info(f"2:SCHEMA EN EL CALL BACK--->{message_schema}  y STAGE {message_stage}")
 
             # EOF
             if message_type == "EOF":
@@ -246,8 +233,6 @@ class MenuJoin(Join):
             logger.error(f"MenuJoin error: {e}")
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
 
     def _build_menu_index(self) -> Dict[str, str]:
         """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
@@ -308,8 +293,6 @@ class MenuJoin(Join):
                     batch = []
             if batch:
                 yield batch
-    
-
 
 class StoreJoin(Join):
     def callback(self, ch, method, properties, body):
@@ -317,6 +300,7 @@ class StoreJoin(Join):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
+                logger.info("Todo enviado")
                 self._forward_eof(header, routing_keys=[])  # fanout
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
