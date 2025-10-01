@@ -17,16 +17,17 @@ VALID_QUERY_IDS = {
     "q_month_top_qty",
     "q_month_top_rev",
     "q_semester_tpv",
-    "q_top3_birthdays"
+    "q_top3_birthdays",
+    "BROADCAST"
 }
 
 HEADER_KEYS = (
     "message_type",
     "query_id",
-    "stage", # etapa de la consulta (ej "filter", "map", etc)
-    "part", # nombre del archivo
+    "stage", # etapa de la consulta (ej "init", "filter", "map", "result", etc)
+    "part",
     "seq", # numero de secuencia del batch
-    "schema", #que archivo es
+    "schema", #el header de archivo; parametros esperados
     "source" # de que archivo viene el mensaje
 )
 

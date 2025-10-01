@@ -2,7 +2,6 @@ import json
 import logging
 import os
 from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-# from lib.filter import YearFilter, HourFilter, AmountFilter
 from lib.filterFactory import FilterFactory
 
 
@@ -39,6 +38,7 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
+        logger.info(f"ROUTING KEYS IN MAIN {output_rks}")
         f = FilterFactory.create(filter_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
 
         f.start()
