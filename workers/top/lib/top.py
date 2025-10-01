@@ -235,12 +235,14 @@ class TopStoreUserPurchases(Top):
         if len(self.top) < self.top_lenght:
             self.top.append((ym, item, suma))
             # hago el sort con el numero 2 porque es donde se encuentra el suma
+            logger.info(f"Inserto directo porque no llegue al limite del top")
             self.top.sort(key=lambda x: x[2], reverse=True)
             return
 
         # Caso: lista llena, comparo con el minimo (ultimo elemento)
         if suma > self.top[-1][1]:
             self.top[-1] = (ym, item, suma)
+            logger.info(f"Inserto y ordeno")
             # hago el sort con el numero 2 porque es donde se encuentra el suma
             self.top.sort(key=lambda x: x[2], reverse=True)
 
@@ -282,12 +284,17 @@ class TopStoreUserPurchases(Top):
                 return
 
             for row in rows:
-                store = row.get("year_month_created_at")       
+                store = row.get("store_name")       
                 usr = row.get("user_id")       
-                user_purchases = row.get("user_purchases", 1)     
-                logger.info(f"row {usr}: {user_purchases}")
+                user_purchases = row.get("user_purchases", 1)  
+                
+                   
                 if store is not None and usr is not None and user_purchases is not None:
+                    logger.info(f"row {usr}: {user_purchases}")
                     self.update(store, usr, user_purchases)
+                else:
+                    logger.info(f"Fila invalida")
+
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
