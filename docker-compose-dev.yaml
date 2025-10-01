@@ -18,6 +18,7 @@ services:
     environment:
       - CONFIG_PATH=/config/config.ini
       - STORAGE_DIR=/storage
+      - APP_CONTROLLER_PORT=9100
     volumes:
       - ./app_controller/config/config.ini:/config/config.ini:ro
       - ./app_controller/storage:/storage
@@ -27,6 +28,11 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+    depends_on:
+      - app_controller
+    environment:
+      - APP_CONTROLLER_HOST=app_controller
+      - APP_CONTROLLER_PORT=9100
     ports:
       - "9000:9000"
     networks:

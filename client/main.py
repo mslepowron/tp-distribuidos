@@ -11,6 +11,8 @@ def main():
     batch_size = int(os.getenv("BATCH_SIZE", 5))
     input_dir = os.getenv("RAW_DATA_DIR", ".")
 
+    logger.info(f"Iniciando cliente → Enviando a {host}:{port} desde {input_dir}")
+
     sender = Sender(host, port, batch_size, input_dir)
     try:
         sender.connect()
