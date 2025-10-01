@@ -10,8 +10,6 @@ from communication.protocol.message import Header
 
 logger = logging.getLogger("join")
 
-#TODO: Este output esta hardcodeade para este caso. Habria que hacer algo mas dinamic.
-
 class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
     OUTPUT_FIELDS: List[str] = []
@@ -319,6 +317,50 @@ class StoreJoin(Join):
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
+    def _send_rows(self, header, source, rows, routing_keys=None):
+        if not rows:
+            return
+
+        try:
+            if routing_keys== "reduce_user_purchases":
+                schema = ["transaction_id", "store_id", "store_name", "user_id" ]
+            else:
+                schema = self.define_schema(header)
+
+            if not schema or any(s == "" for s in schema):
+                first_row = rows[0]
+                schema = list(first_row.keys())
+
+            normalized_rows = []
+            for row in rows:
+                norm_row = {}
+                for field in schema:
+                    value = row.get(field, "")
+                    if isinstance(value, list): #TODO Fix. 
+                        value = ",".join(map(str, value))
+                    norm_row[field] = str(value)
+                normalized_rows.append(norm_row)
+
+            out_header = Header({
+                "message_type": "DATA",
+                "query_id": header.fields.get("query_id"),
+                "stage": header.fields.get("stage"),
+                "part": header.fields.get("part"),
+                "seq": header.fields.get("seq"),
+                "schema": schema,
+                "source": source,
+            })
+
+            payload = serialize_message(out_header, normalized_rows, schema)
+            rks = self.output_rk if routing_keys is None else routing_keys
+
+            self.result_mw.send_to(self.output_exchange, rks[0], payload)
+
+            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
+            logger.info(f"rk={self.output_rk}")
+        except Exception as e:
+            logger.error(f"Error sending results: {e}")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
@@ -337,8 +379,9 @@ class StoreJoin(Join):
                     self.source_file_closed = True
 
                     for batch in self._read_batches(self.files["transactions"], 1000): #TODO: Esta hardcodeado el batch
-                        joined = self._join_batch(batch)
-                        self._send_rows(header, "store_join", joined, self.output_rk)
+                        joined, joined2 = self._join_batch(batch)
+                        self._send_rows(header, "store_join", joined, self.output_rk[0])
+                        self._send_rows(header, "store_join", joined2, self.output_rk[1])
 
                 elif source.startswith("transactions"):
                     if self.source_file_closed:
@@ -356,8 +399,10 @@ class StoreJoin(Join):
                 if not getattr(self, "source_file_closed", False):
                     self._append_rows(self.files["transactions"], rows)
                 else:
-                    joined = self._join_batch(rows)
-                    self._send_rows(header, "store_join", joined, self.output_rk)
+                    joined, joined2 = self._join_batch(rows)
+                    self._send_rows(header, "store_join", joined, self.output_rk[0])
+                    logger.info(f"filas al reduce {joined2}")
+                    self._send_rows(header, "store_join", joined2, self.output_rk[1])
 
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -399,6 +444,7 @@ class StoreJoin(Join):
         if not self.source_file_index:
             return []
         out = []
+        out2 = []
         for t in trx_rows:
             store_id = t.get("store_id") or t.get("id") or ""
             if not store_id:
@@ -410,7 +456,13 @@ class StoreJoin(Join):
                 "final_amount": t.get("final_amount", t.get("amount", "")),
                 "store_name": self.source_file_index.get(store_id, ""),
             })
-        return out
+            out2.append({
+                "transaction_id": t.get("transaction_id"),
+                "store_id": store_id,
+                "store_name": self.source_file_index.get(store_id, ""),
+                "user_id": t.get("user_id"),
+            })
+        return out, out2
 
     def _read_batches(self, file_path: Path, batch_size: int):
         """ Itera el CSV en batches para no cargar todo en memoria """
@@ -428,23 +480,36 @@ class StoreJoin(Join):
                 yield batch
 
 class UserJoin(Join):
+    REQUIRED_STREAMS = ("users", "transactions") #TODO: No se si el output se sigue llamando transactions. Va a estar viniendo del top
+    OUTPUT_FIELDS = ["store_name", "birthdate" ]
+    OUTPUT_FILE_BASENAME = "users_join.csv"
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("birthdate")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
 
-            if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=["q_amount_75_trx"])
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+            
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
-            filtered = []
-            for row in rows:
-                final_amount = float(row.get("final_amount") or 0.0)
-                if final_amount >= 75.0:
-                    filtered.append(row)
-
-            self._send_rows(header, filtered, routing_keys=["q_amount_75_trx"])
-            ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
             logger.error(f"AmountFilter error: {e}")

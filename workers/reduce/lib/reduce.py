@@ -338,6 +338,12 @@ class UserPurchasesReducer(Reduce):
                 logger.info(f"[UserPurchasesReducer] Fila : {row}")
                 store_name = row.get("store_name")
                 user = row.get("user_id")
+                if not user:
+                    logger.warning(f"NO TIENE ID")
+                if not store_name:
+                    logger.warning(f"NO TIENE NOMBRE DE STORE")
+
+
                 if not store_name or not user:
                     logger.warning(f"[UserPurchasesReducer] Fila inválida: {row}")
                     continue

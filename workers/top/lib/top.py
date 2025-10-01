@@ -226,3 +226,66 @@ class TopRevenueGeneratingItems(Top):
 
 
 
+class TopStoreUserPurchases(Top):
+    def start_top(self):
+        self.mw.start_consuming(self.callback)
+
+    def update(self, ym, item, suma):
+        # Caso: aún no llegué a n elementos
+        if len(self.top) < self.top_lenght:
+            self.top.append((ym, item, suma))
+            # hago el sort con el numero 2 porque es donde se encuentra el suma
+            self.top.sort(key=lambda x: x[2], reverse=True)
+            return
+
+        # Caso: lista llena, comparo con el minimo (ultimo elemento)
+        if suma > self.top[-1][1]:
+            self.top[-1] = (ym, item, suma)
+            # hago el sort con el numero 2 porque es donde se encuentra el suma
+            self.top.sort(key=lambda x: x[2], reverse=True)
+
+    def get_top(self):
+        return self.top
+    
+    def to_csv(self, toped):
+        """Convierte el top a formato CSV en un string"""
+        result_rows = [
+                {"store_name": ym, "user_id": item, "user_purchases": sum}
+                for ym, item, sum in toped
+                ]
+        return result_rows
+
+    def callback(self, ch, method, properties, body):
+        try:
+            header, rows = deserialize_message(body)
+            logger.info(f"recibo rows")
+
+            # ["store_name", "user_id", "user_purchases"]
+
+            if header.fields.get("message_type") == "EOF":
+                toped = self.get_top()
+                result_rows = self.to_csv(toped)
+                header.fields["schema"] = str(["store_name", "user_id", "user_purchases"])
+                header.fields["stage"] = "TopStoreUserPurchases"
+                logger.info(f"RESULT ROWS: {result_rows}")
+                self._send_rows(header, result_rows, self.output_rk)
+                self._forward_eof(header, "TopStoreUserPurchases", routing_keys=self.output_rk)
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
+            for row in rows:
+                store = row.get("year_month_created_at")       
+                usr = row.get("user_id")       
+                user_purchases = row.get("user_purchases", 1)     
+                # logger.info(f"row {usr}: {user_purchases}")
+                if store is not None and usr is not None and user_purchases is not None:
+                    self.update(store, usr, user_purchases)
+
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except Exception as e:
+            logger.error(f"TopStoreUserPurchases error: {e}")
+
+
+

@@ -98,6 +98,23 @@ services:
       - ./storage:/storage
     networks:
       - coffee_analysis_net
+  # join_users:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/join/Dockerfile
+  #   depends_on:
+  #     - rabbitmq
+  #   environment:
+  #     - JOIN_TYPE=User
+  #     - QUEUE_NAME=join_users_q
+  #     - INPUT_BINDINGS=[["input_file_ex","direct","users"],["top_user_birthdays_ex","direct","top_user_birthdays"]]
+  #     - OUTPUT_EXCHANGE=results_ex
+  #     - OUTPUT_RKS=["q_top3_birthdays"]
+  #     - STORAGE_DIR=/storage
+  #   volumes:
+  #     - ./storage:/storage
+  #   networks:
+  #     - coffee_analysis_net
   map_year_month:
     build:
       context: .
@@ -178,8 +195,8 @@ services:
       - REDUCE_TYPE=user_purchases
       - QUEUE_NAME=reduce_user_purchases_q
       - INPUT_BINDINGS=[["join_stores_ex","direct","reduce_user_purchases"]]
-      - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_top3_birthdays"] #temporal
+      - OUTPUT_EXCHANGE=reduce_user_purchase_ex
+      - OUTPUT_RKS=["top_user_purchase"]
     networks:
       - coffee_analysis_net
   top_selling_items:
@@ -217,11 +234,13 @@ services:
     depends_on:
       - rabbitmq
     environment:
-      - TOP_TYPE=TopRevenueGeneratinItems
+      - TOP_TYPE=TopStoreUserPurchases
       - QUEUE_NAME=top_generating_items_q
-      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
+      - INPUT_BINDINGS=[["reduce_user_purchase_ex","direct","top_user_purchase"]]
       - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_month_top_rev"]
+      - OUTPUT_RKS=["q_top3_birthdays"]
+      #- OUTPUTEXCHANGE=top_user_birthdays_ex
+      #- OUTPUT_RKS=["top_user_birthdays"]
     networks:
       - coffee_analysis_net
 networks:
