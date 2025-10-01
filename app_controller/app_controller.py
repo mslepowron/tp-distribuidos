@@ -111,7 +111,7 @@ class AppController:
         self.connect_to_middleware()
         self._running = True
 
-        self._wait_for_queues(["filter_year_q"])
+        self._wait_for_queues(["filter_year_q", "join_store_q"])
         try:
             files_grouped = clean_all_files_grouped()
             for routing_key, filename, row_iterator in files_grouped:

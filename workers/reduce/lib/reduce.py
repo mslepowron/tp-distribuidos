@@ -60,14 +60,14 @@ class Reduce:
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
-    def _send_rows(self, header, source, rows, routing_keys):
+    def _send_rows(self, header, source, rows, routing_keys, query_id=None):
         if not rows:
             return
         try:
             schema = self.define_schema(header)
             out_header = Header({
                 "message_type": "DATA",
-                "query_id": header.fields["query_id"],
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": header.fields.get("stage"),
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
@@ -89,11 +89,11 @@ class Reduce:
             logger.error(f"ERROR SEND ROWS. PAYLOAD: {payload}")
             logger.error(f"Error enviando resultado: {e}")
     
-    def _forward_eof(self, header, stage, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None, query_id=None):
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
-                "query_id": header.fields["query_id"],
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
@@ -421,12 +421,12 @@ class TpvReducer(Reduce):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 if self.eofs_received >= self.eofs_expected:
                     self._emit_result(header)
-                    self._forward_eof(header, "TpvReducer", self.output_rk)
+                    self._forward_eof(header, "TpvReducer", self.output_rk, query_id=self.output_rk[0])
                 return
 
             # procesar filas e ir actualizando archivo
             for row in rows:
-                logger.info(f"[TpvReducer] Fila : {row}")
+                # logger.info(f"[TpvReducer] Fila : {row}")
                 yh = row.get("year_half_created_at")
                 store = row.get("store_name")
                 if not yh or not store:
@@ -451,4 +451,4 @@ class TpvReducer(Reduce):
 
         header.fields["schema"] = str(self.schema_out_fields)
         header.fields["stage"] = "ReduceTpv"
-        self._send_rows(header, "tpv_reduce", result_rows, routing_keys=self.output_rk)
+        self._send_rows(header, "tpv_reduce", result_rows, routing_keys=self.output_rk, query_id=self.output_rk[0])

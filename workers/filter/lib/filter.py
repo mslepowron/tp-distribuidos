@@ -72,7 +72,7 @@ class Filter:
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in routing_keys:
-                    logger.info(f"Sent Data through {self.output_exchange} --> DIRECT")
+                    logger.info(f"Sent Data through {self.output_exchange} --> {rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error sending stream data: {e}")
@@ -170,41 +170,49 @@ class HourFilter(Filter):
             parts = raw_fieldnames.split(",")
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            if header.fields["source"].startswith("transactions"): 
+            if header.fields["source"].startswith("store_join"):
+                fieldnames.remove("transaction_id")
+            else:
                 fieldnames.remove("created_at")
                 fieldnames.remove("store_id")
                 fieldnames.remove("user_id")
-            elif header.fields["source"].startswith("store_join"): 
-                fieldnames.remove("transaction_id")
            
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' not found SCHEMAS")
-
+            
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, "FilterHour",routing_keys=self.output_rk)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+                if header.fields["source"].startswith("store_join"):
+                    self._forward_eof(header, "FilterHour",routing_keys=[self.output_rk[1]])
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                else:
+                    logger.info(F"Source en el eof {header.fields.get('source')}")
+                    self._forward_eof(header, "FilterHour",routing_keys=[self.output_rk[0]])
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
             filtered = []
+            rk = None
             for row in rows:
                 logger.info(f"FilterHour processing stream data")
                 hour = int(row["created_at"].split(" ")[1].split(":")[0])
                 if 6 <= hour < 23:
-                    if header.fields["source"].startswith("transactions"):
+                    if header.fields["source"].startswith("store_join"):
+                        row.pop("transaction_id", None)
+                        rk = [self.output_rk[1]]
+                    else:
                         row.pop("created_at", None)
                         row.pop("store_id", None)
                         row.pop("user_id", None)
-                    elif header.fields["source"].startswith("store_join"):
-                        row.pop("transaction_id", None)
+                        rk = [self.output_rk[0]]
                         
                     filtered.append(row)
 
-            self._send_rows(header, filtered, routing_keys=self.output_rk)
+            self._send_rows(header, filtered, routing_keys=rk)
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
@@ -213,6 +221,21 @@ class HourFilter(Filter):
 class AmountFilter(Filter):
     def start_filter(self):
         self.mw.start_consuming(self.callback)
+
+    # def define_schema(self, header):
+    #     try:
+    #         schema = header.fields["schema"] 
+    #         raw_fieldnames = schema.strip()[1:-1]
+    #         parts = raw_fieldnames.split(",")
+    #         fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+    #         fieldnames.remove("created_at")
+    #         fieldnames.remove("store_id")
+    #         fieldnames.remove("user_id")
+           
+    #         return fieldnames
+    #     except KeyError:
+    #         raise KeyError(f"Schema '{raw_fieldnames}' not found SCHEMAS")
 
     def callback(self, ch, method, properties, body):
         try:
@@ -227,6 +250,9 @@ class AmountFilter(Filter):
             for row in rows:
                 final_amount = float(row.get("final_amount") or 0.0)
                 if final_amount >= 75.0:
+                    # row.pop("created_at", None)
+                    # row.pop("store_id", None)
+                    # row.pop("user_id", None)
                     filtered.append(row)
 
             self._send_rows(header, filtered, routing_keys=self.output_rk, query_id=self.output_rk[0])

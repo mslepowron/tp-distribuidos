@@ -135,7 +135,7 @@ class Join:
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema":  header.fields["schema"],
-                "source": header.fields["source"],
+                "source": stage,
             })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
@@ -353,12 +353,11 @@ class StoreJoin(Join):
             })
 
             payload = serialize_message(out_header, normalized_rows, schema)
-            rks = self.output_rk if routing_keys is None else routing_keys
 
-            self.result_mw.send_to(self.output_exchange, rks, payload)
+            self.result_mw.send_to(self.output_exchange, routing_keys, payload)
 
-            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
-            logger.info(f"rk={self.output_rk}")
+            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={routing_keys}")
+            logger.info(f"rk={routing_keys}")
         except Exception as e:
             logger.error(f"Error sending results: {e}")
 
@@ -464,14 +463,14 @@ class StoreJoin(Join):
                     "created_at": t.get("created_at", ""),
                     "store_id": store_id,
                     "final_amount": t.get("final_amount", t.get("amount", "")),
-                    "store_name": self.source_file_index.get(store_id, ""),
+                    "store_name": self.source_file_index.get(store_id, "")
                 })
 
                 out_reduce.append({
                     "transaction_id": t.get("transaction_id"),
                     "store_id": store_id,
                     "store_name": self.source_file_index.get(store_id, ""),
-                    "user_id": t.get("user_id"),
+                    "user_id": t.get("user_id")
                 })
             return out_filter, out_reduce
         except Exception as e:
