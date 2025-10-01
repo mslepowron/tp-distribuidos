@@ -58,14 +58,14 @@ class Top:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
 
-    def _send_rows(self, header, rows, routing_keys):
+    def _send_rows(self, header, rows, routing_keys, query_id=None):
         if not rows:
             return
         try:
             schema = self.define_schema(header)
             out_header = Header({
                 "message_type": header.fields["message_type"],
-                "query_id": header.fields["query_id"],
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": "Top",
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
@@ -82,11 +82,11 @@ class Top:
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
     
-    def _forward_eof(self, header, stage, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None, query_id=None):
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
-                "query_id": header.fields["query_id"],
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
@@ -145,8 +145,8 @@ class TopSellingItems(Top):
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
                 header.fields["stage"] = "TopSellingItems"
                 logger.info(f"RESULT ROWS: {result_rows}")
-                self._send_rows(header, result_rows, self.output_rk)
-                self._forward_eof(header, "TopSellingItems", routing_keys=self.output_rk)
+                self._send_rows(header, result_rows, self.output_rk, self.output_rk[0])
+                self._forward_eof(header, "TopSellingItems", self.output_rk, self.output_rk[0])
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
