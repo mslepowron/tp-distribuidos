@@ -4,35 +4,22 @@ import csv
 import sys
 import os
 import time
+import io
 from typing import Dict, List
 import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
-#from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
-#from initializer import clean_all_files_grouped
-#from pathlib import Path
-from communication.transport.tcp import start_tcp_listener
+from communication.transport.tcp import start_tcp_listener, tcp_send_all
 from initializer import initialize_rows
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app_controller")
 
-#BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
-#CSV_FILE = BASE_DIR / "transactions.csv"
-
-#STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
 TCP_PORT = int(os.getenv("APP_CONTROLLER_PORT", 9000))
-BATCH_SIZE = 5 #TODO> Varialbe de entorno
-
-#SCHEMA_BY_RK = {
-#    "transactions": "transactions.clean",
-#    "transaction_items": "transaction_items.clean",
-#    "menu_items": "menu_items.clean",
-#    "users": "users.clean",
-#    "stores": "stores.clean",
-#} #TODO esto desp sacarle el clean? No me convence xq van a ir cambiando los schemas.
+BATCH_SIZE = 5 #TODO> Variable de entorno
+MAX_REPORT_CHUNK = 8192  # 8KB por chunk
 
 class AppController:
     def __init__(self, host, input_exchange, input_routing_keys,
@@ -49,6 +36,9 @@ class AppController:
         self.mw_input = None
         self.mw_results = None
         self._running = False
+
+        self.results_buffer: Dict[str, List[Dict[str, str]]] = {}
+        self.received_eofs: set[str] = set()
 
     def connect_to_middleware(self):
         try:
@@ -112,15 +102,49 @@ class AppController:
         start_tcp_listener(tcp_port, self.handle_tcp_batch, name="app-controller-tcp")
         logger.info(f"AppController escuchando batches por TCP en puerto {tcp_port}...")
 
+        #def callback_results(ch, method, properties, body): LO DEJO COMENTADO PARA VOLVER A PROBAR SIN TODOS EOFS
+        #    try:
+        #        rk = method.routing_key
+        #        logger.info(f"[results:{rk}] len={len(body)} bytes")
+#
+        #        header, rows = deserialize_message(body)
+        #        logger.info(f"Header: {header.as_dictionary()}")
+        #        for row in rows:
+        #            logger.info(f"Resultado recibido: {row}")
+        #        self._store_result(rk, rows)
+#
+        #        # Forzar envío inmediato para debug
+        #        self._flush_reports()
+#
+        #    except Exception as e:
+        #        logger.error(f"Error deserializando resultado: {e}")
+        #    finally:
+        #        ch.basic_ack(delivery_tag=method.delivery_tag)
+
         def callback_results(ch, method, properties, body):
             try:
-                rk = method.routing_key  # ej: "q_amount_75_tx"
+                rk = method.routing_key  
                 logger.info(f"[results:{rk}] len={len(body)} bytes")
 
                 header, rows = deserialize_message(body)
                 logger.info(f"Header: {header.as_dictionary()}")
                 for row in rows:
                     logger.info(f"Resultado recibido: {row}")
+
+                msg_type = header.fields.get("message_type")
+                query_id = header.fields.get("query_id", rk)
+
+                if msg_type == "DATA":
+                    self._store_result(rk, rows)
+                elif msg_type == "EOF":
+                    logger.info(f"EOF recibido para {query_id}")
+                    self.received_eofs.add(query_id)
+                    # si ya tengo EOF de todas las queries esperadas, flush
+                    if self._all_eofs_received():
+                        logger.info("Todos los EOF recibidos, generando reportes...")
+                        self._flush_reports()
+                else:
+                    logger.warning(f"Mensaje inesperado: {msg_type}")
             except Exception as e:
                 logger.error(f"Error deserializando resultado: {e}")
             finally:
@@ -132,110 +156,12 @@ class AppController:
         except Exception as e:
             logger.error(f"Error consumiendo resultados: {e}")
         finally:
+            self._flush_reports()
             self.shutdown()
-
     
-#    def run(self):
-#        self.connect_to_middleware()
-#        self._running = True
-#        self._wait_for_queues(["filter_year_q"])
-#        try:
-#            files_grouped = clean_all_files_grouped()
-#            for routing_key, filename, row_iterator in files_grouped:
-#                logger.info(f"Procesando archivo {filename} con routing_key={routing_key}")
-#                self._send_batches_from_iterator(row_iterator, routing_key)
-#                self.send_end_of_file(routing_key=routing_key)
-#
-#        except Exception as e:
-#            logger.error(f"Error processing files: {e}")
-#
-#        def callback_results(ch, method, properties, body):
-#            try:
-#                # Deserializar con tu nuevo protocolo
-#                rk = method.routing_key  # ej: "q_amount_75_tx"
-#                logger.info(f"[results:{rk}] len={len(body)} bytes")
-#
-#                # Elegir el schema por rk si difiere por query dejo hardocdeado de ej transactions.raw:
-#                header, rows = deserialize_message(body)
-#                logger.info(f"Header: {header.as_dictionary()}")
-#                for row in rows:
-#                    logger.info(f"Resultado recibido: {row}")
-#            except Exception as e:
-#                logger.error(f"Error deserializando resultado: {e}")
-#            finally:
-#                ch.basic_ack(delivery_tag=method.delivery_tag)
-#
-#        logger.info(f"Esperando resultados en queue '{self.result_sink_queue}'...")
-#        try:
-#            self.result_mw.start_consuming(callback_results)
-#        except Exception as e:
-#            logger.error(f"Error consumiendo resultados: {e}")
-#        finally:
-#            self.shutdown()
-
-#    def _send_batches_from_iterator(self, row_iterator, routing_key: str):
-#        source = SCHEMA_BY_RK[routing_key]
-#        schema = CLEAN_SCHEMAS[source]  # obtener lista de campos del esquema limpio
-#        batch = []
-#        for row in row_iterator:
-#            if not self._running:
-#                break
-#            batch.append(row)
-#            if len(batch) >= BATCH_SIZE:
-#                self.send_batch(batch, routing_key, source, schema)
-#                batch = []
-#        if batch and self._running:
-#            self.send_batch(batch, routing_key, source, schema)
-
-    # def send_batch(self, batch, routing_key: str, source: str):
-#    def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
-#        if not self._running or not batch:
-#            return
-#        try:
-#            header_fields = [
-#                ("message_type", "DATA"),
-#                ("query_id", "q_amount_75_tx"),  # TODO: Creo que no lo vamos a necesitar
-#                ("stage", "INIT"),
-#                ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
-#                ("seq", str(uuid4())),
-#                ("schema", schema),
-#                ("source", source)
-#            ]
-#            header = Header(header_fields)
-#
-#            message_bytes = serialize_message(header, batch, schema)
-#            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
-#            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
-#
-#            logger.info(f"Batch {self.input_exchange}:{routing_key} ({len(batch)} filas)")
-#
-#        except Exception as e:
-#            logger.error(f"Error enviando batch: {e}")
-#
-#    def send_end_of_file(self, routing_key: str):
-#        try:
-#            schema = []
-#            source = SCHEMA_BY_RK[routing_key]
-#            header_fields = [
-#                ("message_type", "EOF"),
-#                ("query_id", "q_amount_75_tx"),
-#                ("stage", "INIT"),
-#                ("part", "transactions.raw"),
-#                ("seq", str(uuid4())),
-#                ("schema", schema),
-#                ("source", source)
-#            ]
-#            header = Header(header_fields)
-#            # Enviamos un mensaje vacío, el filtro lo va a interpretar
-#            message_bytes = serialize_message(header, [], schema)
-#            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
-#            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
-#            logger.info(f"EOF → {self.input_exchange}:{routing_key}")
-#        except Exception as e:
-#            logger.error(f"Error enviando END_OF_FILE: {e}")
-#
-#    
-
+    def _all_eofs_received(self):
+    # cada query_id corresponde a un routing key esperado
+        return self.received_eofs.issuperset(set(self.result_routing_keys))
 
     def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
         """
@@ -264,9 +190,6 @@ class AppController:
             logger.error(f"Error enviando batch: {e}")
 
     def send_end_of_file(self, routing_key: str, source: str):
-        """
-        Envía un mensaje EOF al middleware para indicar fin de archivo/stream.
-        """
         try:
             schema = []  # sin payload
             header_fields = [
@@ -311,4 +234,40 @@ class AppController:
         finally:
             conn.close()
             logger.info(f"Conexión TCP cerrada desde {addr}")
+    
+    def _store_result(self, routing_key, rows):
+        if routing_key not in self.results_buffer:
+            self.results_buffer[routing_key] = []
+        self.results_buffer[routing_key].extend(rows)
+
+    def _flush_reports(self, gw_host="gateway", gw_port=9200):
+        files = self._generate_csv_reports()
+        for name, content in files.items():
+            data = content.encode("utf-8")
+            total_size = len(data)
+            logger.info(f"Enviando reporte {name} ({total_size} bytes) en chunks...")
+
+            for i in range(0, total_size, MAX_REPORT_CHUNK):
+                chunk = data[i:i+MAX_REPORT_CHUNK]
+                header = f"FILENAME:{name};BATCH:{i//MAX_REPORT_CHUNK}\n"
+                payload = header.encode("utf-8") + chunk
+                tcp_send_all(gw_host, gw_port, payload)
+
+            eof_msg = f"EOF:{name}\n".encode("utf-8")
+            tcp_send_all(gw_host, gw_port, eof_msg)
+            logger.info(f"Reporte {name} completado y enviado en {((total_size-1)//MAX_REPORT_CHUNK)+1} chunks")
+
+    def _generate_csv_reports(self):
+        files = {}
+        for rk, rows in self.results_buffer.items():
+            if not rows:
+                continue
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+            files[f"{rk}.csv"] = output.getvalue()
+        return files
+
+    
 

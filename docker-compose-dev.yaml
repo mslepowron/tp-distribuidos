@@ -34,7 +34,8 @@ services:
       - APP_CONTROLLER_HOST=app_controller
       - APP_CONTROLLER_PORT=9100
     ports:
-      - "9000:9000"
+      - "9000:9000"  # batches cliente -> gateway
+      - "9200:9200"  # reportes app_controller -> gateway
     networks:
       - coffee_analysis_net
   client:
@@ -50,6 +51,9 @@ services:
       - RAW_DATA_DIR=/entrada_cliente
     volumes:
       - ./entrada_cliente:/entrada_cliente:ro
+      - ./salida_cliente:/salida_cliente
+    ports:
+      - "9300:9300"  
     networks:
       - coffee_analysis_net
   filter_year:

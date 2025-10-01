@@ -17,6 +17,8 @@ def main():
     try:
         sender.connect()
         sender.send_batches()
+        sender.wait_for_reports()
+        logger.info("Todos los reportes recibidos, cliente finalizado")
     finally:
         sender.shutdown()
 
