@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp
 CSV_FILE = BASE_DIR / "transactions.csv"
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
-
+TCP_PORT = int(os.getenv("APP_CONTROLLER_PORT", 9000))
 BATCH_SIZE = 5 #TODO> Varialbe de entorno
 
 SCHEMA_BY_RK = {
@@ -104,8 +104,6 @@ class AppController:
     def run(self):
         self.connect_to_middleware()
         self._running = True
-
-        # time.sleep(10)
         self._wait_for_queues(["filter_year_q"])
         try:
             files_grouped = clean_all_files_grouped()

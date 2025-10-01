@@ -23,6 +23,29 @@ services:
       - ./app_controller/storage:/storage
     networks:
       - coffee_analysis_net
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    ports:
+      - "9000:9000"
+    networks:
+      - coffee_analysis_net
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    depends_on:
+      - gateway
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=9000
+      - BATCH_SIZE=5
+      - RAW_DATA_DIR=/entrada_cliente
+    volumes:
+      - ./entrada_cliente:/entrada_cliente:ro
+    networks:
+      - coffee_analysis_net
   filter_year:
     build:
       context: .
