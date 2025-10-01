@@ -149,7 +149,23 @@ services:
   #   networks:
   #     - coffee_analysis_net
 #  --------------------------------------- REDUCE Q2.1
-  reduce_quantity:
+  # reduce_quantity:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - REDUCE_TYPE=quantity
+  #     - QUEUE_NAME=reduce_quantity_q
+  #     - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
+  #     - OUTPUT_EXCHANGE=reduce_qty_ex
+  #     - OUTPUT_RKS=["month_quantity"]
+  #   networks:
+  #     - coffee_analysis_net
+#  --------------------------------------- REDUCE Q2.2
+  reduce_profit:
     build:
       context: .
       dockerfile: workers/reduce/Dockerfile
@@ -157,11 +173,11 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      - REDUCE_TYPE=quantity
-      - QUEUE_NAME=reduce_quantity_q
-      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
-      - OUTPUT_EXCHANGE=reduce_qty_ex
-      - OUTPUT_RKS=["month_quantity"]
+      - REDUCE_TYPE=profit
+      - QUEUE_NAME=reduce_profit_q
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
+      - OUTPUT_EXCHANGE=reduce_profit_ex
+      - OUTPUT_RKS=["month_profit"]
     networks:
       - coffee_analysis_net
 #  --------------------------------------- REDUCE Q3
@@ -181,7 +197,23 @@ services:
   #   networks:
   #     - coffee_analysis_net
 #  --------------------------------------- TOP Q2.1
-  top_selling_items:
+  # top_selling_items:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/top/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - TOP_TYPE=TopSellingItems
+  #     - QUEUE_NAME=top_selling_items_q
+  #     - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
+  #     - OUTPUT_EXCHANGE=results_ex
+  #     - OUTPUT_RKS=["q_month_top_qty"]
+  #   networks:
+  #     - coffee_analysis_net
+#  --------------------------------------- TOP Q2.2
+  top_revenue_generating_items:
     build:
       context: .
       dockerfile: workers/top/Dockerfile
@@ -189,11 +221,11 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      - TOP_TYPE=TopSellingItems
-      - QUEUE_NAME=top_selling_items_q
-      - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
+      - TOP_TYPE=TopRevenueGeneratinItems
+      - QUEUE_NAME=top_generating_items_q
+      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
       - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_month_top_qty"]
+      - OUTPUT_RKS=["q_month_top_rev"]
     networks:
       - coffee_analysis_net
 networks:

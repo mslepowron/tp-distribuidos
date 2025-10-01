@@ -205,8 +205,8 @@ class TopRevenueGeneratingItems(Top):
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "profit_sum"])
                 header.fields["stage"] = "TopRevenueGeneratingItems"
                 logger.info(f"RESULT ROWS: {result_rows}")
-                self._send_rows(header, result_rows, self.output_rk)
-                self._forward_eof(header, "TopRevenueGeneratingItems", routing_keys=self.output_rk)
+                self._send_rows(header, result_rows, self.output_rk, self.output_rk[0])
+                self._forward_eof(header, "TopRevenueGeneratingItems", self.output_rk, self.output_rk[0])
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
