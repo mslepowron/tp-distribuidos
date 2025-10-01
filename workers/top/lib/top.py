@@ -155,7 +155,7 @@ class TopSellingItems(Top):
                 ym = row.get("year_month_created_at")       
                 item = row.get("item_name")       
                 count = row.get("selling_qty", 1)     
-                # logger.info(f"row {item}: {count}")
+                #logger.info(f"row {item}: {count}")
                 if ym is not None and item is not None and count is not None:
                     self.update(ym, item, count)
 
@@ -258,15 +258,22 @@ class TopStoreUserPurchases(Top):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-            logger.info(f"recibo rows")
+            message_schema = header.fields.get("schema")
+
+            logger.info(f"Schema recibido: {message_schema}")
 
             # ["store_name", "user_id", "user_purchases"]
 
             if header.fields.get("message_type") == "EOF":
+                logger.info(f"Proceso EOF")
                 toped = self.get_top()
+                logger.info(f"Obtengo el top {toped}")
                 result_rows = self.to_csv(toped)
+                logger.info(f"Lo converto a csb {result_rows}")
                 header.fields["schema"] = str(["store_name", "user_id", "user_purchases"])
+                logger.info(f"cambio schema")
                 header.fields["stage"] = "TopStoreUserPurchases"
+                logger.info(f"cambio stage")
                 logger.info(f"RESULT ROWS: {result_rows}")
                 self._send_rows(header, result_rows, self.output_rk)
                 self._forward_eof(header, "TopStoreUserPurchases", routing_keys=self.output_rk)
@@ -278,7 +285,7 @@ class TopStoreUserPurchases(Top):
                 store = row.get("year_month_created_at")       
                 usr = row.get("user_id")       
                 user_purchases = row.get("user_purchases", 1)     
-                # logger.info(f"row {usr}: {user_purchases}")
+                logger.info(f"row {usr}: {user_purchases}")
                 if store is not None and usr is not None and user_purchases is not None:
                     self.update(store, usr, user_purchases)
 

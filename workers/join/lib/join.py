@@ -12,7 +12,7 @@ logger = logging.getLogger("join")
 
 class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
-    OUTPUT_FIELDS: List[str] = []
+    # OUTPUT_FIELDS: List[str] = []
     OUTPUT_FILE_BASENAME: str = None  #archivo donde se guarda el resultado del join
 
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
@@ -143,6 +143,7 @@ class Join:
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
+                    logger.info(f"Envio eof a --->{rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -170,7 +171,7 @@ class Join:
 
 class MenuJoin(Join):
     REQUIRED_STREAMS = ("menu_items", "transaction_items")
-    OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
+    # OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
     OUTPUT_FILE_BASENAME = "menu_join.csv"
 
     def define_schema(self, header):
@@ -298,7 +299,7 @@ class MenuJoin(Join):
 
 class StoreJoin(Join):
     REQUIRED_STREAMS = ("stores", "transactions")
-    OUTPUT_FIELDS = ["transaction_id", "created_at", "final_amount", "store_id", "store_name" ]
+    # OUTPUT_FIELDS = ["transaction_id", "created_at", "final_amount", "store_id", "store_name" ]
     OUTPUT_FILE_BASENAME = "store_join.csv"
 
     def define_schema(self, header):
@@ -316,14 +317,16 @@ class StoreJoin(Join):
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+        except Exception as e:
+            logger.error(f"Error define_schema: {e}")
 
     def _send_rows(self, header, source, rows, routing_keys=None):
         if not rows:
             return
 
         try:
-            if routing_keys== "reduce_user_purchases":
-                schema = ["transaction_id", "store_id", "store_name", "user_id" ]
+            if routing_keys == "reduce_user_purchases":
+                schema = ["transaction_id", "store_id", "store_name", "user_id"]
             else:
                 schema = self.define_schema(header)
 
@@ -336,8 +339,6 @@ class StoreJoin(Join):
                 norm_row = {}
                 for field in schema:
                     value = row.get(field, "")
-                    if isinstance(value, list): #TODO Fix. 
-                        value = ",".join(map(str, value))
                     norm_row[field] = str(value)
                 normalized_rows.append(norm_row)
 
@@ -354,7 +355,7 @@ class StoreJoin(Join):
             payload = serialize_message(out_header, normalized_rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
 
-            self.result_mw.send_to(self.output_exchange, rks[0], payload)
+            self.result_mw.send_to(self.output_exchange, rks, payload)
 
             logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
             logger.info(f"rk={self.output_rk}")
@@ -370,7 +371,8 @@ class StoreJoin(Join):
             message_stage = header.fields.get("stage")
             message_schema = header.fields.get("schema")
 
-            # EOF
+            logger.info(f"Schema recibido: {message_schema}")
+
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
@@ -381,7 +383,7 @@ class StoreJoin(Join):
                     for batch in self._read_batches(self.files["transactions"], 1000): #TODO: Esta hardcodeado el batch
                         joined, joined2 = self._join_batch(batch)
                         self._send_rows(header, "store_join", joined, self.output_rk[0])
-                        self._send_rows(header, "store_join", joined2, self.output_rk[1])
+                        self._send_rows(header, "store_join", joined, self.output_rk[1])
 
                 elif source.startswith("transactions"):
                     if self.source_file_closed:
@@ -397,87 +399,126 @@ class StoreJoin(Join):
 
             elif source.startswith("transactions"):
                 if not getattr(self, "source_file_closed", False):
+                    # si todavia no me llego el archivo pivot entero almaceno las rows
                     self._append_rows(self.files["transactions"], rows)
                 else:
                     joined, joined2 = self._join_batch(rows)
                     self._send_rows(header, "store_join", joined, self.output_rk[0])
-                    logger.info(f"filas al reduce {joined2}")
                     self._send_rows(header, "store_join", joined2, self.output_rk[1])
 
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"MenuJoin error: {e}")
+            logger.error(f"StoreJoin error: {e}")
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def _build_menu_index(self) -> Dict[str, str]:
-        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
-        menu_rows = self._read_rows(self.files["stores"])
+        try:
+            """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
+            menu_rows = self._read_rows(self.files["stores"])
 
-        def pick_store_id(row):
-            return row.get("store_id") or row.get("id") or ""
+            def pick_store_id(row):
+                return row.get("store_id") or row.get("id") or ""
 
-        def pick_store_name(row):
-            raw_name = row.get("store_name") or row.get("name") or ""
-            # Si es un string que parece lista, extraigo el primer elemento
-            try:
-                parsed = ast.literal_eval(raw_name)
-                if isinstance(parsed, list) and parsed:
-                    return parsed[0]
-            except (ValueError, SyntaxError):
-                pass
-            return raw_name
+            def pick_store_name(row):
+                raw_name = row.get("store_name") or row.get("name") or ""
+                # Si es un string que parece lista, extraigo el primer elemento
+                try:
+                    parsed = ast.literal_eval(raw_name)
+                    if isinstance(parsed, list) and parsed:
+                        return parsed[0]
+                except (ValueError, SyntaxError):
+                    pass
+                return raw_name
 
-        index = {}
-        for m in menu_rows:
-            mid = pick_store_id(m)
-            nm = pick_store_name(m)
-            if mid and nm:
-                index[mid] = nm
-        logger.info(f"Store index construido con {len(index)} items")
-        return index
+            index = {}
+            for m in menu_rows:
+                mid = pick_store_id(m)
+                nm = pick_store_name(m)
+                if mid and nm:
+                    index[mid] = nm
+            logger.info(f"Store index construido con {len(index)} items")
+            return index
+        except Exception as e:
+            logger.error(f"Error build menu index: {e}")
 
     def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """ Hace el join sobre un batch de transacciones usando el menú indexado """
-        if not self.source_file_index:
-            return []
-        out = []
-        out2 = []
-        for t in trx_rows:
-            store_id = t.get("store_id") or t.get("id") or ""
-            if not store_id:
-                continue
-            out.append({
-                "transaction_id": t.get("transaction_id"),
-                "created_at": t.get("created_at", ""),
-                "store_id": store_id,
-                "final_amount": t.get("final_amount", t.get("amount", "")),
-                "store_name": self.source_file_index.get(store_id, ""),
-            })
-            out2.append({
-                "transaction_id": t.get("transaction_id"),
-                "store_id": store_id,
-                "store_name": self.source_file_index.get(store_id, ""),
-                "user_id": t.get("user_id"),
-            })
-        return out, out2
+        try:
+            """ Hace el join sobre un batch de transacciones usando el menú indexado """
+            if not self.source_file_index:
+                return [], []
+
+            out_filter = []
+            out_reduce = []
+
+            for t in trx_rows:
+                store_id = t.get("store_id")
+
+                if not store_id:
+                    continue
+
+                out_filter.append({
+                    "transaction_id": t.get("transaction_id"),
+                    "created_at": t.get("created_at", ""),
+                    "store_id": store_id,
+                    "final_amount": t.get("final_amount", t.get("amount", "")),
+                    "store_name": self.source_file_index.get(store_id, ""),
+                })
+
+                out_reduce.append({
+                    "transaction_id": t.get("transaction_id"),
+                    "store_id": store_id,
+                    "store_name": self.source_file_index.get(store_id, ""),
+                    "user_id": t.get("user_id"),
+                })
+            return out_filter, out_reduce
+        except Exception as e:
+            logger.error(f"Error join batch: {e}")
+
+    # def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    #     """ Hace el join sobre un batch de transacciones usando el menú indexado """
+    #     if not self.source_file_index:
+    #         return []
+    #     out = []
+    #     out2 = []
+    #     for t in trx_rows:
+    #         store_id = t.get("store_id") or t.get("id") or ""
+    #         if not store_id:
+    #             continue
+    #         out.append({
+    #             "transaction_id": t.get("transaction_id"),
+    #             "created_at": t.get("created_at", ""),
+    #             "store_id": store_id,
+    #             "final_amount": t.get("final_amount", t.get("amount", "")),
+    #             "store_name": self.source_file_index.get(store_id, ""),
+    #         })
+    #         out2.append({
+    #             "transaction_id": t.get("transaction_id"),
+    #             "store_id": store_id,
+    #             "store_name": self.source_file_index.get(store_id, ""),
+    #             "user_id": t.get("user_id"),
+    #         })
+    #     return out, out2
 
     def _read_batches(self, file_path: Path, batch_size: int):
-        """ Itera el CSV en batches para no cargar todo en memoria """
-        if not file_path.exists() or file_path.stat().st_size == 0:
-            return
-        with file_path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            batch = []
-            for row in reader:
-                batch.append(row)
-                if len(batch) >= batch_size:
+        try:
+            """  Itera el CSV en batches para no cargar todo en memoria """
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                return
+            with file_path.open("r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                batch = []
+                for row in reader:
+                    batch.append(row)
+                    if len(batch) >= batch_size:
+                        yield batch
+                        batch = []
+                if batch:
                     yield batch
-                    batch = []
-            if batch:
-                yield batch
+        except Exception as e:
+            logger.error(f"Error read batches: {e}")
 
 class UserJoin(Join):
     REQUIRED_STREAMS = ("users", "transactions") #TODO: No se si el output se sigue llamando transactions. Va a estar viniendo del top

@@ -303,10 +303,10 @@ class UserPurchasesReducer(Reduce):
                     rows[(r["store_name"], r["user_id"])] = float(r["user_purchases"])
 
         # actualizar acumulado
-        key = (store_name, user)
+        key = (store_name, user_id)
         old_val = rows.get(key, 0.0)
         rows[key] = old_val + 1 # incremento la cantidad de compras del usr en 1
-        logger.debug(f"[UserPurchasesReducer] Update ({store_name}, {user}): {old_val} -> {rows[key]}")
+        logger.debug(f"[UserPurchasesReducer] Update ({store_name}, {user_id}): {old_val} -> {rows[key]}")
 
         # reescribir archivo con todos los acumulados
         with open(self.storage_file, "w", newline="") as f:
