@@ -7,13 +7,20 @@ services:
       - 15672:15672
     networks:
       - coffee_analysis_net
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
   app_controller:
     build:
       context: .
       dockerfile: app_controller/Dockerfile
     depends_on:
-      - rabbitmq
-      - filter_year
+      rabbitmq:
+        condition: service_healthy
+      filter_year:
+        condition: service_started
     environment:
       - CONFIG_PATH=/config/config.ini
       - STORAGE_DIR=/storage
@@ -33,7 +40,8 @@ services:
       - OUTPUT_EXCHANGE=filter_year_ex
       - OUTPUT_RKS=["transactions","transaction_items"]
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     networks:
       - coffee_analysis_net
   filter_hour:
@@ -47,7 +55,8 @@ services:
       - OUTPUT_EXCHANGE=filter_hour_ex
       - OUTPUT_RKS=[]
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     networks:
       - coffee_analysis_net
   filter_amount:
@@ -55,7 +64,8 @@ services:
       context: .
       dockerfile: workers/filter/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - FILTER_TYPE=Amount
       - QUEUE_NAME=filter_amount_q
@@ -69,7 +79,8 @@ services:
       context: .
       dockerfile: workers/join/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - JOIN_TYPE=Menu
       - QUEUE_NAME=join_menu_q
@@ -86,7 +97,8 @@ services:
       context: .
       dockerfile: workers/join/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - JOIN_TYPE=Store
       - QUEUE_NAME=join_store_q
@@ -120,7 +132,8 @@ services:
       context: .
       dockerfile: workers/map/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - MAP_TYPE=YearMonth
       - QUEUE_NAME=map_year_month_q
@@ -134,7 +147,8 @@ services:
       context: .
       dockerfile: workers/map/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - MAP_TYPE=YearHalf
       - QUEUE_NAME=map_year_half_q
@@ -148,7 +162,8 @@ services:
       context: .
       dockerfile: workers/reduce/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - REDUCE_TYPE=quantity
       - QUEUE_NAME=reduce_quantity_q
@@ -162,7 +177,8 @@ services:
       context: .
       dockerfile: workers/reduce/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - REDUCE_TYPE=profit
       - QUEUE_NAME=reduce_profit_q
@@ -176,7 +192,8 @@ services:
       context: .
       dockerfile: workers/reduce/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - REDUCE_TYPE=tpv
       - QUEUE_NAME=reduce_tpv_q
@@ -190,7 +207,8 @@ services:
       context: .
       dockerfile: workers/reduce/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - REDUCE_TYPE=user_purchases
       - QUEUE_NAME=reduce_user_purchases_q
@@ -204,7 +222,8 @@ services:
       context: .
       dockerfile: workers/top/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - TOP_TYPE=TopSellingItems
       - QUEUE_NAME=top_selling_items_q
@@ -218,7 +237,8 @@ services:
       context: .
       dockerfile: workers/top/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - TOP_TYPE=TopRevenueGeneratinItems
       - QUEUE_NAME=top_generating_items_q
@@ -232,7 +252,8 @@ services:
       context: .
       dockerfile: workers/top/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - TOP_TYPE=TopStoreUserPurchases
       - QUEUE_NAME=top_generating_items_q

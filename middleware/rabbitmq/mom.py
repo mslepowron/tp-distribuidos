@@ -14,6 +14,7 @@ from ..middleware import (
 MAX_RETRIES = 5
 DELAY = 5
 AMQP_PORT = 5672
+INITIAL_DELAY = 1  # segundos (1, 2, 4, 8, 16...)
 
 Binding = Tuple[str, str, str] #Info de (exchange, exchange?type, routing_key)
 
@@ -27,7 +28,6 @@ class MessageMiddlewareQueue(MessageMiddleware):
         self.channel = None
         self._consuming = False
 
-
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 self.connection = pika.BlockingConnection(
@@ -39,17 +39,18 @@ class MessageMiddlewareQueue(MessageMiddleware):
                 )
                 self.channel = self.connection.channel()
                 self.channel.queue_declare(queue=self.queue_name, durable=True)
-                logger.info(f"Connected to RabbitMQ at {self.host}:{5672}")
+                logger.info(f"Connected to RabbitMQ at {self.host}:{AMQP_PORT}")
                 logger.info(f"Connected to queue {self.queue_name}; channel:{self.channel}")
                 break
             except pika.exceptions.AMQPConnectionError as e:
-                logger.warning(f"Attempt {attempt}: Could not connect: {e}")
+                delay = INITIAL_DELAY * (2 ** (attempt - 1))
+                logger.warning(f"Attempt {attempt}: Could not connect to {self.host}:{AMQP_PORT} - {e}")
                 if attempt < MAX_RETRIES:
-                    logger.info(f"Retrying in {DELAY} seconds...")
-                    time.sleep(DELAY
-                    )
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
+
     def start_consuming(self, on_message_callback):
         try:
             self._consuming = True
@@ -116,7 +117,6 @@ class MessageMiddlewareExchange(MessageMiddleware):
                         blocked_connection_timeout=30,
                     )
                 )
-
                 self.channel = self.connection.channel()
                 self.channel.queue_declare(queue=self.queue_name, durable=True)
 
@@ -124,18 +124,19 @@ class MessageMiddlewareExchange(MessageMiddleware):
                     logger.error(f"UNROUTABLE: exchange={method.exchange} rk={method.routing_key} len={len(body)}")
 
                 self.channel.add_on_return_callback(_on_return)
-                
+
                 if bindings:
                     for ex_name, ex_type, r_key in bindings:
                         self.bind_to_exchange(ex_name, ex_type, r_key)
-                
+
                 logger.info(f"Connected to RabbitMQ at {self.host}:{AMQP_PORT} (queue={self.queue_name})")
                 break
             except pika.exceptions.AMQPConnectionError as e:
-                logger.warning(f"Attempt {attempt}: Could not connect: {e}")
+                delay = INITIAL_DELAY * (2 ** (attempt - 1))
+                logger.warning(f"Attempt {attempt}: Could not connect to {self.host}:{AMQP_PORT} - {e}")
                 if attempt < MAX_RETRIES:
-                    logger.info(f"Retrying in {DELAY} seconds...")
-                    time.sleep(DELAY)
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
                 else:
                     raise MessageMiddlewareDisconnectedError(str(e))
 

@@ -21,7 +21,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp
 CSV_FILE = BASE_DIR / "transactions.csv"
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
-
 BATCH_SIZE = 5 #TODO> Varialbe de entorno
 
 SCHEMA_BY_RK = {
@@ -31,6 +30,14 @@ SCHEMA_BY_RK = {
     "users": "users.clean",
     "stores": "stores.clean",
 } #TODO esto desp sacarle el clean? No me convence xq van a ir cambiando los schemas.
+
+QUERY_IDS_BY_FILE = {
+    "transactions": ["q_amount_75_tx", "q_semester_tpv", "q_top3_birthdays"],
+    "transaction_items": ["q_month_top_qty", "q_month_top_rev"],
+    "menu_items": ["q_month_top_qty", "q_month_top_rev"],
+    "stores": ["q_semester_tpv", "q_top3_birthdays"],
+    "users": ["q_top3_birthdays"],
+}
 
 class AppController:
     def __init__(self, host, input_exchange, input_routing_keys,
@@ -110,7 +117,8 @@ class AppController:
         try:
             files_grouped = clean_all_files_grouped()
             for routing_key, filename, row_iterator in files_grouped:
-                logger.info(f"Procesando archivo {filename} con routing_key={routing_key}")
+                queries = QUERY_IDS_BY_FILE.get(routing_key, [])
+                logger.info(f"Procesando archivo '{filename}' con routing_key='{routing_key}' para queries: {queries}")
                 self._send_batches_from_iterator(row_iterator, routing_key)
                 self.send_end_of_file(routing_key=routing_key)
 
@@ -154,52 +162,100 @@ class AppController:
                 batch = []
         if batch and self._running:
             self.send_batch(batch, routing_key, source, schema)
-
-    # def send_batch(self, batch, routing_key: str, source: str):
+    
     def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
         if not self._running or not batch:
             return
         try:
-            header_fields = [
-                ("message_type", "DATA"),
-                ("query_id", "q_amount_75_tx"),  # TODO: Creo que no lo vamos a necesitar
-                ("stage", "INIT"),
-                ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
-                ("seq", str(uuid4())),
-                ("schema", schema),
-                ("source", source)
-            ]
-            header = Header(header_fields)
+            queries = QUERY_IDS_BY_FILE.get(routing_key, ["unknown"])
+            for query_id in queries:
+                header_fields = [
+                    ("message_type", "DATA"),
+                    ("query_id", query_id),
+                    ("stage", "INIT"),
+                    ("part", source),
+                    ("seq", str(uuid4())),
+                    ("schema", schema),
+                    ("source", source)
+                ]
+                header = Header(header_fields)
 
-            message_bytes = serialize_message(header, batch, schema)
-            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
-            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
+                message_bytes = serialize_message(header, batch, schema)
+                self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
 
-            logger.info(f"Batch {self.input_exchange}:{routing_key} ({len(batch)} filas)")
-
+                logger.info(f"[SEND] query_id={query_id} → {self.input_exchange}:{routing_key} ({len(batch)} filas)")
         except Exception as e:
-            logger.error(f"Error enviando batch: {e}")
+            logger.error(f"Error enviando batch para routing_key={routing_key}: {e}")
 
     def send_end_of_file(self, routing_key: str):
         try:
             schema = []
             source = SCHEMA_BY_RK[routing_key]
-            header_fields = [
-                ("message_type", "EOF"),
-                ("query_id", "q_amount_75_tx"),
-                ("stage", "INIT"),
-                ("part", "transactions.raw"),
-                ("seq", str(uuid4())),
-                ("schema", schema),
-                ("source", source)
-            ]
-            header = Header(header_fields)
-            # Enviamos un mensaje vacío, el filtro lo va a interpretar
-            message_bytes = serialize_message(header, [], schema)
-            route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
-            self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
-            logger.info(f"EOF → {self.input_exchange}:{routing_key}")
-        except Exception as e:
-            logger.error(f"Error enviando END_OF_FILE: {e}")
+            queries = QUERY_IDS_BY_FILE.get(routing_key, ["unknown"])
 
-    
+            for query_id in queries:
+                header_fields = [
+                    ("message_type", "EOF"),
+                    ("query_id", query_id),
+                    ("stage", "INIT"),
+                    ("part", source),
+                    ("seq", str(uuid4())),
+                    ("schema", schema),
+                    ("source", source)
+                ]
+                header = Header(header_fields)
+                message_bytes = serialize_message(header, [], schema)
+                self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
+                logger.info(f"[EOF] query_id={query_id} → {self.input_exchange}:{routing_key}")
+        except Exception as e:
+            logger.error(f"Error enviando END_OF_FILE para routing_key={routing_key}: {e}")
+
+
+    # def send_batch(self, batch, routing_key: str, source: str):
+    #def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
+    #    if not self._running or not batch:
+    #        return
+    #    try:
+    #        header_fields = [
+    #            ("message_type", "DATA"),
+    #            ("query_id", "q_amount_75_tx"),  # TODO: Creo que no lo vamos a necesitar
+    #            ("stage", "INIT"),
+    #            ("part", "transactions.raw"), #Esto es para reducers, aca no serviria
+    #            ("seq", str(uuid4())),
+    #            ("schema", schema),
+    #            ("source", source)
+    #        ]
+    #        header = Header(header_fields)
+#
+    #        message_bytes = serialize_message(header, batch, schema)
+    #        route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
+    #        self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
+#
+    #        logger.info(f"Batch {self.input_exchange}:{routing_key} ({len(batch)} filas)")
+#
+    #    except Exception as e:
+    #        logger.error(f"Error enviando batch: {e}")
+#
+    #def send_end_of_file(self, routing_key: str):
+    #    try:
+    #        schema = []
+    #        source = SCHEMA_BY_RK[routing_key]
+    #        header_fields = [
+    #            ("message_type", "EOF"),
+    #            ("query_id", "q_amount_75_tx"),
+    #            ("stage", "INIT"),
+    #            ("part", "transactions.raw"),
+    #            ("seq", str(uuid4())),
+    #            ("schema", schema),
+    #            ("source", source)
+    #        ]
+    #        header = Header(header_fields)
+    #        # Enviamos un mensaje vacío, el filtro lo va a interpretar
+    #        message_bytes = serialize_message(header, [], schema)
+    #        route_key = self.input_routing_keys[0] if self.input_routing_keys else ""
+    #        self.mw_input.send_to(self.input_exchange, routing_key, message_bytes)
+    #        logger.info(f"EOF → {self.input_exchange}:{routing_key}")
+    #    except Exception as e:
+    #        logger.error(f"Error enviando END_OF_FILE: {e}")
+#
+    #
