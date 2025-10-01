@@ -1,10 +1,9 @@
 import json
 import logging
 import os
+from pathlib import Path
 from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-# from lib.filter import YearFilter, HourFilter, AmountFilter
 from lib.reduceFactory import ReduceFactory
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("reduce-main")
@@ -37,18 +36,17 @@ def main():
         for ex, ex_type, rk in input_bindings:
             logger.info(f"Binding: ex={ex} type={ex_type} rk={rk}")
 
-
         mw_out = MessageMiddlewareExchange(
             host="rabbitmq",
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        f = ReduceFactory.create(reduce_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
-
+        storage = Path(os.getenv("STORAGE_DIR", "storage"))
+        f = ReduceFactory.create(reduce_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
         f.start()
 
     except Exception as e:
-        logger.error(f"Fallo al inicializar filter: {e}")
+        logger.error(f"Failed to initialize reduce: {e}")
 
 if __name__ == "__main__":
     main()

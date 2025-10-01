@@ -3,11 +3,11 @@ import logging
 import os
 from pathlib import Path
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
-from lib.joinFactory import JoinFactory
+from lib.topFactory import TopFactory
 
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("join-main")
+logger = logging.getLogger("top-main")
 
 def parse_json_env(name, default=None):
     raw = os.getenv(name)
@@ -21,8 +21,8 @@ def parse_json_env(name, default=None):
 
 def main():
     try:
-        join_type = os.getenv("JOIN_TYPE")
-        queue_name = os.getenv("QUEUE_NAME", f"{join_type.lower()}_q")
+        top_type = os.getenv("TOP_TYPE")
+        queue_name = os.getenv("QUEUE_NAME", f"{top_type.lower()}_q")
 
         input_bindings  = parse_json_env("INPUT_BINDINGS", [])
         output_exchange = os.getenv("OUTPUT_EXCHANGE", "")
@@ -39,16 +39,12 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        storage = Path(os.getenv("STORAGE_DIR", "storage"))
-        logger.info(f"STORAGE: {storage}")
-        logger.info(f"routing keys: {output_rks}")
+        t = TopFactory.create(top_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
 
-        j = JoinFactory.create(join_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
-
-        j.start()
+        t.start()
 
     except Exception as e:
-        logger.error(f"Failed to initialize join: {e}")
+        logger.error(f"Failed to initialize top: {e}")
 
 if __name__ == "__main__":
     main()

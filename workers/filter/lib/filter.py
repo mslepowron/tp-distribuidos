@@ -164,6 +164,8 @@ class HourFilter(Filter):
                 fieldnames.remove("created_at")
                 fieldnames.remove("store_id")
                 fieldnames.remove("user_id")
+            elif header.fields["source"].startswith("store_join"): 
+                fieldnames.remove("transaction_id")
            
             return fieldnames
         except KeyError:
@@ -174,6 +176,7 @@ class HourFilter(Filter):
             header, rows = deserialize_message(body)
 
             if header.fields.get("message_type") == "EOF":
+                logger.info("Todo enviado")
                 self._forward_eof(header, "FilterHour",routing_keys=[])  # fanout
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
@@ -186,6 +189,9 @@ class HourFilter(Filter):
                         row.pop("created_at", None)
                         row.pop("store_id", None)
                         row.pop("user_id", None)
+                    elif header.fields["source"].startswith("store_join"):
+                        row.pop("transaction_id", None)
+                        
                     filtered.append(row)
 
             self._send_rows(header, filtered, routing_keys=[])  # fanout
