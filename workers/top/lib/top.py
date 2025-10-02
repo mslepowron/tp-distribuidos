@@ -3,6 +3,7 @@ from communication.protocol.deserialize import deserialize_message
 from communication.protocol.serialize import serialize_message
 from communication.protocol.message import Header
 from communication.protocol.schemas import CLEAN_SCHEMAS
+import copy
 
 logger = logging.getLogger("top")
 
@@ -58,19 +59,20 @@ class Top:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
 
-    def _send_rows(self, header, rows, routing_keys, query_id=None):
+    def _send_rows(self, header, source, rows, routing_keys, query_id=None):
         if not rows:
             return
         try:
             schema = self.define_schema(header)
+            logging.info(f"SEND ROWS HEADER: {header.fields}")
             out_header = Header({
                 "message_type": header.fields["message_type"],
                 "query_id": query_id if query_id is not None else header.fields["query_id"],
-                "stage": "Top",
+                "stage": header.fields.get("stage"),
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema": schema,
-                "source": header.fields["source"],
+                "source": source,
             })
             payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
@@ -93,16 +95,16 @@ class Top:
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema": header.fields["schema"],
-                "source": header.fields["source"],
+                "source": stage,
             })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
-                logger.info(f"Envio data a {self.output_exchange} FANOUT")
+                logger.info(f"Send EOF through {self.output_exchange} FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
-                    logger.info(f"Envio data a {self.output_exchange} con la rk {rk}")
+                    logger.info(f"Send EOF through {self.output_exchange} with rk {rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -149,7 +151,7 @@ class TopSellingItems(Top):
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
                 header.fields["stage"] = "TopSellingItems"
                 logger.info(f"RESULT ROWS: {result_rows}")
-                self._send_rows(header, result_rows, self.output_rk, self.output_rk[0])
+                self._send_rows(header, "TopSellingItems", result_rows, self.output_rk, self.output_rk[0])
                 self._forward_eof(header, "TopSellingItems", self.output_rk, self.output_rk[0])
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -209,7 +211,7 @@ class TopRevenueGeneratingItems(Top):
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "profit_sum"])
                 header.fields["stage"] = "TopRevenueGeneratingItems"
                 logger.info(f"RESULT ROWS: {result_rows}")
-                self._send_rows(header, result_rows, self.output_rk, self.output_rk[0])
+                self._send_rows(header, "TopRevenueGeneratingItems", result_rows, self.output_rk, self.output_rk[0])
                 self._forward_eof(header, "TopRevenueGeneratingItems", self.output_rk, self.output_rk[0])
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -278,11 +280,14 @@ class TopStoreUserPurchases(Top):
                 # logger.info(f"Lo converto a csb {result_rows}")
                 header.fields["schema"] = str(["store_name", "user_id", "user_purchases"])
                 # logger.info(f"cambio schema")
-                header.fields["stage"] = "TopStoreUserPurchases"
+                header.fields["stage"] = "store_top" 
+
+                header_send_rows = copy.deepcopy(header)
+                header_send_rows.fields["message_type"] = "DATA"
                 # logger.info(f"cambio stage")
                 logger.info(f"RESULT ROWS: {result_rows}")
-                self._send_rows(header, result_rows, self.output_rk)
-                self._forward_eof(header, "TopStoreUserPurchases", routing_keys=self.output_rk)
+                self._send_rows(header_send_rows, "store_top", result_rows, self.output_rk)
+                self._forward_eof(header, "store_top", routing_keys=self.output_rk)
 
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return

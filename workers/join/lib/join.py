@@ -81,7 +81,7 @@ class Join:
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
     
-    def _send_rows(self, header, source, rows, routing_keys=None):
+    def _send_rows(self, header, source, rows, routing_keys=None, query_id=None):
         if not rows:
             return
 
@@ -104,7 +104,7 @@ class Join:
 
             out_header = Header({
                 "message_type": "DATA",
-                "query_id": header.fields.get("query_id"),
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": header.fields.get("stage"),
                 "part": header.fields.get("part"),
                 "seq": header.fields.get("seq"),
@@ -126,11 +126,11 @@ class Join:
         except Exception as e:
             logger.error(f"Error sending results: {e}")
     
-    def _forward_eof(self, header, stage, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None, query_id=None):
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
-                "query_id": header.fields["query_id"],
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
@@ -376,7 +376,7 @@ class StoreJoin(Join):
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
                 if source.startswith("stores"):
-                    self.source_file_index = self._build_menu_index()
+                    self.source_file_index = self._build_stores_index()
                     self.source_file_closed = True
 
                     for batch in self._read_batches(self.files["transactions"], 1000): #TODO: Esta hardcodeado el batch
@@ -413,7 +413,7 @@ class StoreJoin(Join):
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def _build_menu_index(self) -> Dict[str, str]:
+    def _build_stores_index(self) -> Dict[str, str]:
         try:
             """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
             menu_rows = self._read_rows(self.files["stores"])
@@ -521,7 +521,7 @@ class StoreJoin(Join):
 
 class UserJoin(Join):
     # como transaction va a ser un top 3 ahora el qe espero es el users
-    REQUIRED_STREAMS = ("transactions", "users") 
+    REQUIRED_STREAMS = ("user_stores", "users") 
     # OUTPUT_FIELDS = ["store_name", "birthdate" ]
     OUTPUT_FILE_BASENAME = "users_join.csv"
 
@@ -537,12 +537,12 @@ class UserJoin(Join):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.append("user_birthday")
+            fieldnames.append("birthday")
 
             fieldnames.remove("user_purchases")
             fieldnames.remove("user_id")
 
-            logger.info("CAMBIAR EL DEFINE SCHEMA, cual hay que cambiar? el user o store??'")
+            logger.info(f"SCHEMAAAA: {schema}")
 
             return fieldnames
         except KeyError:
@@ -561,17 +561,17 @@ class UserJoin(Join):
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
-                if source.startswith("transactions"):
-                    self.source_file_index = self._build_menu_index()
+                if source.startswith("store"):
+                    self.source_file_index = self._build_store_join_index()
                     self.source_file_closed = True
 
                     for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
                         joined = self._join_batch(batch)
-                        self._send_rows(header, "users_join", joined, self.output_rk)
+                        self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
 
                 elif source.startswith("users"):
                     if self.source_file_closed:
-                        self._forward_eof(header, "users_join", self.output_rk)
+                        self._forward_eof(header, "users_join", self.output_rk, self.output_rk[0])
 
                 if ch is not None and hasattr(method, "delivery_tag"):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -579,8 +579,8 @@ class UserJoin(Join):
 
             logger.info(f"Recibo data: '{source}' proveniente de: {message_stage} y source {source}")
             # DATA
-            if source.startswith("transactions"): #archivo que espero que me llegue
-                self._append_rows(self.files["transactions"], rows)
+            if source.startswith("store"): #archivo que espero que me llegue
+                self._append_rows(self.files["user_stores"], rows)
 
             elif source.startswith("users"): #archivo que llega en batchs
                 if not getattr(self, "source_file_closed", False):
@@ -593,14 +593,14 @@ class UserJoin(Join):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"MenuJoin error: {e}")
+            logger.error(f"UserJoin error: {e}")
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def _build_menu_index(self) -> Dict[str, str]:
+    def _build_store_join_index(self) -> Dict[str, str]:
         """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
         logger.info("Revisar 1")
-        rows = self._read_rows(self.files["transactions"])
+        rows = self._read_rows(self.files["user_stores"])
 
         index = {}
         for row in rows:
@@ -608,7 +608,7 @@ class UserJoin(Join):
             nm = row.get("store_name")
             if mid and nm:
                 index[mid] = nm
-        logger.info(f"Menu index construido con {len(index)} items")
+        logger.info(f"Store Users index construido con {len(index)} items")
         return index
 
     def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -622,7 +622,7 @@ class UserJoin(Join):
                 continue
             out.append({
                 "store_name": self.source_file_index.get(user_id, ""),
-                "user_birthday": t.get("user_birthday"),
+                "birthday": t.get("birthday"),
             })
         return out
 
