@@ -34,6 +34,8 @@ class Join:
 
         self.join_out_file: Path = storage / self.OUTPUT_FILE_BASENAME
 
+        self.users_received = False
+
         logger.info(f"en el init {output_rks}")
         if isinstance(output_rks, str):
             self.output_rk = [output_rks] if output_rks else []
@@ -524,6 +526,7 @@ class UserJoin(Join):
     REQUIRED_STREAMS = ("user_stores", "users") 
     # OUTPUT_FIELDS = ["store_name", "birthdate" ]
     OUTPUT_FILE_BASENAME = "users_join.csv"
+    
 
     # user_id deberia ser el pivot
 
@@ -537,12 +540,13 @@ class UserJoin(Join):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.append("birthday")
+            fieldnames.append("birthdate")
 
             fieldnames.remove("user_purchases")
             fieldnames.remove("user_id")
 
             logger.info(f"SCHEMAAAA: {schema}")
+            logger.info(f"fieldnames: {fieldnames}")
 
             return fieldnames
         except KeyError:
@@ -567,6 +571,7 @@ class UserJoin(Join):
 
                     for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
                         joined = self._join_batch(batch)
+                        # logger.info(f"row: {rows[0]}")
                         self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
 
                 elif source.startswith("users"):
@@ -580,6 +585,7 @@ class UserJoin(Join):
             logger.info(f"Recibo data: '{source}' proveniente de: {message_stage} y source {source}")
             # DATA
             if source.startswith("store"): #archivo que espero que me llegue
+                # logger.info(f"row: {rows[0]}")
                 self._append_rows(self.files["user_stores"], rows)
 
             elif source.startswith("users"): #archivo que llega en batchs
@@ -587,6 +593,7 @@ class UserJoin(Join):
                     self._append_rows(self.files["users"], rows)
                 else:
                     joined = self._join_batch(rows)
+                    # logger.info(f"row: {rows[0]}")
                     self._send_rows(header, "users_join", joined, self.output_rk)
 
             if ch is not None and hasattr(method, "delivery_tag"):
@@ -597,6 +604,7 @@ class UserJoin(Join):
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
+
     def _build_store_join_index(self) -> Dict[str, str]:
         """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
         logger.info("Revisar 1")
@@ -604,7 +612,11 @@ class UserJoin(Join):
 
         index = {}
         for row in rows:
-            mid = row.get("user_id")
+            # mid = float(row.get("user_id"))
+            # mid = row.get("user_id")
+            mid = str(int(float(row.get("user_id")))) if row.get("user_id") else None
+
+            logger.info(f"Valor ---> {mid}")
             nm = row.get("store_name")
             if mid and nm:
                 index[mid] = nm
@@ -617,12 +629,19 @@ class UserJoin(Join):
             return []
         out = []
         for t in trx_rows:
-            user_id = t.get("user_id")
+            # user_id = t.get("user_id")
+            user_id = str(int(float(t.get("user_id")))) if t.get("user_id") else None
+
             if not user_id:
                 continue
+
+            if not self.source_file_index.get(user_id):
+                # logger.info(f"no esta")
+                continue
+                
             out.append({
                 "store_name": self.source_file_index.get(user_id, ""),
-                "birthday": t.get("birthday"),
+                "birthdate": t.get("birthdate"),
             })
         return out
 
