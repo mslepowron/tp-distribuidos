@@ -75,9 +75,11 @@ class Top:
             payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  #caso fanout; aca nos aplica para el hours
+                logger.info(f"Envio data a {self.output_exchange} con FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
+                    logger.info(f"Envio data a {self.output_exchange} con la rk {rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
@@ -96,9 +98,11 @@ class Top:
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
+                logger.info(f"Envio data a {self.output_exchange} FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
+                    logger.info(f"Envio data a {self.output_exchange} con la rk {rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -267,15 +271,15 @@ class TopStoreUserPurchases(Top):
             # ["store_name", "user_id", "user_purchases"]
 
             if header.fields.get("message_type") == "EOF":
-                logger.info(f"Proceso EOF")
+                # logger.info(f"Proceso EOF")
                 toped = self.get_top()
-                logger.info(f"Obtengo el top {toped}")
+                # logger.info(f"Obtengo el top {toped}")
                 result_rows = self.to_csv(toped)
-                logger.info(f"Lo converto a csb {result_rows}")
+                # logger.info(f"Lo converto a csb {result_rows}")
                 header.fields["schema"] = str(["store_name", "user_id", "user_purchases"])
-                logger.info(f"cambio schema")
+                # logger.info(f"cambio schema")
                 header.fields["stage"] = "TopStoreUserPurchases"
-                logger.info(f"cambio stage")
+                # logger.info(f"cambio stage")
                 logger.info(f"RESULT ROWS: {result_rows}")
                 self._send_rows(header, result_rows, self.output_rk)
                 self._forward_eof(header, "TopStoreUserPurchases", routing_keys=self.output_rk)

@@ -520,9 +520,13 @@ class StoreJoin(Join):
             logger.error(f"Error read batches: {e}")
 
 class UserJoin(Join):
-    REQUIRED_STREAMS = ("users", "transactions") #TODO: No se si el output se sigue llamando transactions. Va a estar viniendo del top
-    OUTPUT_FIELDS = ["store_name", "birthdate" ]
+    # como transaction va a ser un top 3 ahora el qe espero es el users
+    REQUIRED_STREAMS = ("transactions", "users") 
+    # OUTPUT_FIELDS = ["store_name", "birthdate" ]
     OUTPUT_FILE_BASENAME = "users_join.csv"
+
+    # user_id deberia ser el pivot
+
 
     def define_schema(self, header):
         try:
@@ -533,7 +537,12 @@ class UserJoin(Join):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.append("birthdate")
+            fieldnames.append("user_birthday")
+
+            fieldnames.remove("user_purchases")
+            fieldnames.remove("user_id")
+
+            logger.info("CAMBIAR EL DEFINE SCHEMA, cual hay que cambiar? el user o store??'")
 
             return fieldnames
         except KeyError:
@@ -542,15 +551,92 @@ class UserJoin(Join):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-
+            
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
-            
+            message_schema = header.fields.get("schema")
+
+            # EOF
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
+                if source.startswith("transactions"):
+                    self.source_file_index = self._build_menu_index()
+                    self.source_file_closed = True
+
+                    for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
+                        joined = self._join_batch(batch)
+                        self._send_rows(header, "users_join", joined, self.output_rk)
+
+                elif source.startswith("users"):
+                    if self.source_file_closed:
+                        self._forward_eof(header, "users_join", self.output_rk)
+
+                if ch is not None and hasattr(method, "delivery_tag"):
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
+            logger.info(f"Recibo data: '{source}' proveniente de: {message_stage} y source {source}")
+            # DATA
+            if source.startswith("transactions"): #archivo que espero que me llegue
+                self._append_rows(self.files["transactions"], rows)
+
+            elif source.startswith("users"): #archivo que llega en batchs
+                if not getattr(self, "source_file_closed", False):
+                    self._append_rows(self.files["users"], rows)
+                else:
+                    joined = self._join_batch(rows)
+                    self._send_rows(header, "users_join", joined, self.output_rk)
+
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"AmountFilter error: {e}")
+            logger.error(f"MenuJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
+    def _build_menu_index(self) -> Dict[str, str]:
+        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
+        logger.info("Revisar 1")
+        rows = self._read_rows(self.files["transactions"])
+
+        index = {}
+        for row in rows:
+            mid = row.get("user_id")
+            nm = row.get("store_name")
+            if mid and nm:
+                index[mid] = nm
+        logger.info(f"Menu index construido con {len(index)} items")
+        return index
+
+    def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menú indexado """
+        if not self.source_file_index:
+            return []
+        out = []
+        for t in trx_rows:
+            user_id = t.get("user_id")
+            if not user_id:
+                continue
+            out.append({
+                "store_name": self.source_file_index.get(user_id, ""),
+                "user_birthday": t.get("user_birthday"),
+            })
+        return out
+
+    def _read_batches(self, file_path: Path, batch_size: int):
+        """ Itera el CSV en batches para no cargar todo en memoria """
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            return
+        with file_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch

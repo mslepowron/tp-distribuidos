@@ -116,22 +116,41 @@ services:
 #       - ./storage:/storage
 #     networks:
 #       - coffee_analysis_net
+#  --------------------------------------- JOIN DE Q4
+  join_users:
+    build:
+      context: .
+      dockerfile: workers/join/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - JOIN_TYPE=User
+      - QUEUE_NAME=join_users_q
+      - INPUT_BINDINGS=[["input_file_ex","direct","users"],["top_user_birthdays_ex","direct","top_user_birthdays"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_top3_birthdays"]
+      - STORAGE_DIR=/storage
+    volumes:
+      - ./storage:/storage
+    networks:
+      - coffee_analysis_net
 # #  --------------------------------------- MAP de Q2
-#   map_year_month:
-#     build:
-#       context: .
-#       dockerfile: workers/map/Dockerfile
-#     depends_on:
-#       rabbitmq:
-#         condition: service_healthy
-#     environment:
-#       - MAP_TYPE=YearMonth
-#       - QUEUE_NAME=map_year_month_q
-#       - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
-#       - OUTPUT_EXCHANGE=map_year_month_ex
-#       - OUTPUT_RKS=["quantity", "profit"]
-#     networks:
-#       - coffee_analysis_net
+  # map_year_month:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/map/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - MAP_TYPE=YearMonth
+  #     - QUEUE_NAME=map_year_month_q
+  #     - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
+  #     - OUTPUT_EXCHANGE=map_year_month_ex
+  #     - OUTPUT_RKS=["quantity", "profit"]
+  #   networks:
+  #     - coffee_analysis_net
 # #  --------------------------------------- MAP de Q3
 #   map_year_half:
 #     build:
@@ -256,10 +275,8 @@ services:
       - TOP_TYPE=TopStoreUserPurchases
       - QUEUE_NAME=top_generating_items_q
       - INPUT_BINDINGS=[["reduce_user_purchase_ex","direct","top_user_purchase"]]
-      - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_top3_birthdays"]
-      #- OUTPUTEXCHANGE=top_user_birthdays_ex
-      #- OUTPUT_RKS=["top_user_birthdays"]
+      - OUTPUTEXCHANGE=top_user_birthdays_ex
+      - OUTPUT_RKS=["top_user_birthdays"]
     networks:
       - coffee_analysis_net
 networks:
