@@ -115,84 +115,6 @@ class Reduce:
 
 # ----------------- SUBCLASES -----------------
 
-# class QuantityReducer(Reduce):
-#     #REQUIRED_STREAMS = ["menu_items_by_month"]
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         self.schema_out_fields = ["year_month_created_at", "item_name", "selling_qty"]
-#         self.storage_file = Path("storage/reduce_quantity.csv")
-#         self.eofs_received = 0
-#         self.eofs_expected = 1
-
-#         self.storage_file.parent.mkdir(parents=True, exist_ok=True)
-#         if self.storage_file.exists():
-#             self.storage_file.unlink()
-
-#     def start_reducer(self):
-#         self.mw.start_consuming(self.callback)
-
-#     def _update_storage(self, ym, item):
-#         """Lee el archivo y actualiza el contador para (ym,item)."""
-#         rows = {}
-#         if self.storage_file.exists():
-#             with open(self.storage_file, newline="") as f:
-#                 reader = csv.DictReader(f)
-#                 for r in reader:
-#                     rows[(r["year_month_created_at"], r["item_name"])] = int(r["selling_qty"])
-
-#         # actualizar acumulado
-#         key = (ym, item)
-#         old_val = rows.get(key, 0)
-#         rows[key] = old_val + 1
-#         # logger.info(f"[QuantityReducer] Update ({ym}, {item}): {old_val} -> {rows[key]}")
-
-#         # reescribir archivo con todos los acumulados
-#         with open(self.storage_file, "w", newline="") as f:
-#             writer = csv.DictWriter(f, fieldnames=self.schema_out_fields)
-#             writer.writeheader()
-#             for (ym, item), qty in rows.items():
-#                 writer.writerow({"year_month_created_at": ym, "item_name": item, "selling_qty": qty})
-#         logger.debug(f"[QuantityReducer] Storage reescrito con {len(rows)} filas.")
-
-#     def callback(self, ch, method, properties, body):
-#         try:
-#             header, rows = deserialize_message(body)
-
-#             if header.fields.get("message_type") == "EOF":
-#                 self.eofs_received += 1
-#                 logger.info(f"[QuantityReducer] EOF recibido ({self.eofs_received}/{self.eofs_expected})")
-#                 ch.basic_ack(delivery_tag=method.delivery_tag)
-#                 if self.eofs_received >= self.eofs_expected:
-#                     self._emit_result(header)
-#                     self._forward_eof(header, "QuantityReducer", self.output_rk)
-#                 return
-
-#             for row in rows:
-#                 ym = row.get("year_month_created_at")
-#                 item = row.get("item_name")
-#                 if ym and item:
-#                     self._update_storage(ym, item)
-#                 # else:
-#                     # logger.warning(f"[QuantityReducer] Fila inválida: {row}")
-              
-#             ch.basic_ack(delivery_tag=method.delivery_tag)
-
-#         except Exception as e:
-#             logger.error(f"Error en QuantityReducer: {e}")
-
-#     def _emit_result(self, header):
-#         result_rows = []
-#         if self.storage_file.exists():
-#             with open(self.storage_file, newline="") as f:
-#                 reader = csv.DictReader(f)
-#                 for r in reader:
-#                     result_rows.append(r)
-#         logger.info(f"[QuantityReducer] Emisión final con {len(result_rows)} filas.")
-
-#         header.fields["schema"] = str(self.schema_out_fields)
-#         header.fields["stage"] = "ReduceQuantity"
-#         self._send_rows(header, "quantity_reduce", result_rows, routing_keys=self.output_rk)
-
 class QuantityReducer(Reduce):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -206,6 +128,8 @@ class QuantityReducer(Reduce):
             self.temp_file.unlink()
         if self.storage_file.exists():
             self.storage_file.unlink()
+        
+        self.temp_file.touch()
 
     def _append_temp(self, ym, item, qty):
         """Escribir en archivo temporal sin acumular en memoria."""
@@ -216,6 +140,8 @@ class QuantityReducer(Reduce):
     def callback(self, ch, method, properties, body):
         header, rows = deserialize_message(body)
 
+        logger.info(f"[QuantityReducer] Header recibido: {header.fields}")
+        
         if header.fields.get("message_type") == "EOF":
             self.eofs_received += 1
             if self.eofs_received >= self.eofs_expected:
@@ -224,23 +150,22 @@ class QuantityReducer(Reduce):
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
-        # for row in rows:
-        #     ym = row.get("year_month_created_at")
-        #     item = row.get("item_name")
-        #     if ym and item:
-        #         self._append_temp(ym, item)
         for row in rows:
             ym = row.get("year_month_created_at")
             item = row.get("item_name")
             qty = row.get("quantity")
             if ym and item and qty:
+                logger.info(f"[QuantityReducer] Guardando fila válida: ym={ym}, item={item}, qty={qty}")
                 self._append_temp(ym, item, qty)
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     def _aggregate_and_emit(self, header):
         """Fase de reducción externa: ordenar y acumular resultados."""
-        # Leer todo y hacer sort externo (chunk sort + merge)
+        if not self.temp_file.exists() or self.temp_file.stat().st_size == 0:
+            logger.warning("[QuantityReducer] No hay datos en temp_file, no se emitirá resultado.")
+            return
+
         chunk_size = 500000
         chunks = []
         with open(self.temp_file, newline="") as f:
@@ -264,12 +189,11 @@ class QuantityReducer(Reduce):
                     w.writerows(chunk)
                 chunks.append(chunk_file)
 
-        # Merge externo
+        # merge y reducción igual que antes
         files = [open(cf, newline="") for cf in chunks]
         readers = [csv.reader(f) for f in files]
         merged = heapq.merge(*readers, key=lambda r: (r[0], r[1]))
 
-        # Reducir en un solo archivo final
         with open(self.storage_file, "w", newline="") as out:
             writer = csv.DictWriter(out, fieldnames=["year_month_created_at", "item_name", "selling_qty"])
             writer.writeheader()
@@ -287,8 +211,10 @@ class QuantityReducer(Reduce):
             if last_key:
                 writer.writerow({"year_month_created_at": last_key[0], "item_name": last_key[1], "selling_qty": acc})
 
-        for f in files: f.close()
-        for cf in chunks: cf.unlink()
+        for f in files: 
+            f.close()
+        for cf in chunks: 
+            cf.unlink()
 
         # Emitir resultados
         with open(self.storage_file, newline="") as f:

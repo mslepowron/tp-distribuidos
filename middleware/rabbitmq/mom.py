@@ -141,7 +141,7 @@ class MessageMiddlewareExchange(MessageMiddleware):
                     raise MessageMiddlewareDisconnectedError(str(e))
 
     #asegurarse de ya tener el exchange
-    def ensure_exchange(self, exchange_name: str, exchange_type: str = "direct", durable: bool = True):
+    def ensure_exchange(self, exchange_name: str, exchange_type: str = "direct", durable: bool = False):
         self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=durable)
         logger.info(f"ensure_exchange: name={exchange_name} type={exchange_type} durable={durable}")            
     

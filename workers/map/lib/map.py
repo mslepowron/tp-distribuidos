@@ -106,21 +106,22 @@ class Map:
 class MapYearMonth(Map):
     def start_map(self):
         self.mw.start_consuming(self.callback)
-
+    
     def define_schema(self, header):
         try:
             schema = header.fields["schema"] 
             raw_fieldnames = schema.strip()[1:-1]
             parts = raw_fieldnames.split(",")
 
-            # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
             if header.fields["source"].startswith("menu_join"): 
-                fieldnames.remove("created_at")
-                fieldnames.append("year_month_created_at")
-            # elsif:
-            # logger.info(f"SHEMAAA --->{fieldnames}")
+                # sacamos created_at pero preservamos lo demás
+                if "created_at" in fieldnames:
+                    fieldnames.remove("created_at")
+                if "year_month_created_at" not in fieldnames:
+                    fieldnames.append("year_month_created_at")
+
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")

@@ -185,7 +185,11 @@ class MenuJoin(Join):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.append("item_name")
+            if "quantity" not in fieldnames:
+                fieldnames.append("quantity")
+
+            if "item_name" not in fieldnames:
+                fieldnames.append("item_name")
 
             return fieldnames
         except KeyError:
@@ -194,25 +198,26 @@ class MenuJoin(Join):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-            
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
-            message_schema = header.fields.get("schema")
 
-            # EOF
+            # -------------------- EOF --------------------
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
                 if source.startswith("menu_items"):
+                    # Construyo el índice del menú
                     self.source_file_index = self._build_menu_index()
                     self.source_file_closed = True
 
-                    for batch in self._read_batches(self.files["transaction_items"], 1000): #TODO: Esta hardcodeado el batch
+                    # Hago join de todo lo acumulado de transacciones
+                    for batch in self._read_batches(self.files["transaction_items"], 1000):
                         joined = self._join_batch(batch)
                         self._send_rows(header, "menu_join", joined, self.output_rk)
 
                 elif source.startswith("transaction_items"):
+                    # Cuando ya tengo menú y me llega EOF de transacciones, forward EOF
                     if self.source_file_closed:
                         self._forward_eof(header, "menu_join", routing_keys=self.output_rk)
 
@@ -220,14 +225,16 @@ class MenuJoin(Join):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            # DATA
+            # -------------------- DATA --------------------
             if source.startswith("menu_items"):
                 self._append_rows(self.files["menu_items"], rows)
 
             elif source.startswith("transaction_items"):
                 if not getattr(self, "source_file_closed", False):
+                    # Guardo mientras no tengo menú completo
                     self._append_rows(self.files["transaction_items"], rows)
                 else:
+                    # Ya tengo menú indexado → hago join directo
                     joined = self._join_batch(rows)
                     self._send_rows(header, "menu_join", joined, self.output_rk)
 
@@ -279,6 +286,7 @@ class MenuJoin(Join):
                 "transaction_id": t.get("transaction_id", t.get("trx_id", "")),
                 "created_at": t.get("created_at", ""),
                 "item_id": item_id,
+                "quantity": t.get("quantity", 0),
                 "subtotal": t.get("subtotal", t.get("amount", "")),
                 "item_name": self.source_file_index.get(item_id, ""),
             })
@@ -477,31 +485,6 @@ class StoreJoin(Join):
             return out_filter, out_reduce
         except Exception as e:
             logger.error(f"Error join batch: {e}")
-
-    # def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    #     """ Hace el join sobre un batch de transacciones usando el menú indexado """
-    #     if not self.source_file_index:
-    #         return []
-    #     out = []
-    #     out2 = []
-    #     for t in trx_rows:
-    #         store_id = t.get("store_id") or t.get("id") or ""
-    #         if not store_id:
-    #             continue
-    #         out.append({
-    #             "transaction_id": t.get("transaction_id"),
-    #             "created_at": t.get("created_at", ""),
-    #             "store_id": store_id,
-    #             "final_amount": t.get("final_amount", t.get("amount", "")),
-    #             "store_name": self.source_file_index.get(store_id, ""),
-    #         })
-    #         out2.append({
-    #             "transaction_id": t.get("transaction_id"),
-    #             "store_id": store_id,
-    #             "store_name": self.source_file_index.get(store_id, ""),
-    #             "user_id": t.get("user_id"),
-    #         })
-    #     return out, out2
 
     def _read_batches(self, file_path: Path, batch_size: int):
         try:
