@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp
 CSV_FILE = BASE_DIR / "transactions.csv"
 
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
-BATCH_SIZE = 5 #TODO> Varialbe de entorno
+BATCH_SIZE = 100000 #TODO> Varialbe de entorno
 
 SCHEMA_BY_RK = {
     "transactions": "transactions.clean",
@@ -111,7 +111,8 @@ class AppController:
         self.connect_to_middleware()
         self._running = True
 
-        self._wait_for_queues(["filter_year_q", "join_store_q"])
+        # self._wait_for_queues(["filter_year_q", "join_store_q"])
+        self._wait_for_queues(["filter_year_q", "join_menu_q"])
         try:
             files_grouped = clean_all_files_grouped()
             for routing_key, filename, row_iterator in files_grouped:

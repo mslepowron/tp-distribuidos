@@ -120,7 +120,7 @@ class MapYearMonth(Map):
                 fieldnames.remove("created_at")
                 fieldnames.append("year_month_created_at")
             # elsif:
-            logger.info(f"SHEMAAA --->{fieldnames}")
+            # logger.info(f"SHEMAAA --->{fieldnames}")
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
@@ -189,7 +189,7 @@ class MapYearHalf(Map):
             mapped = []
 
             for row in rows:
-                logger.info(f"ROW: {row}")
+                # logger.info(f"ROW: {row}")
                 try:
                     date_part = row["created_at"].split(" ")[0]  
                     year, month, _ = date_part.split("-")        # "2024", "10", "01"

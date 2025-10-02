@@ -38,7 +38,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
                     )
                 )
                 self.channel = self.connection.channel()
-                self.channel.queue_declare(queue=self.queue_name, durable=True)
+                self.channel.queue_declare(queue=self.queue_name, durable=False)
                 logger.info(f"Connected to RabbitMQ at {self.host}:{AMQP_PORT}")
                 logger.info(f"Connected to queue {self.queue_name}; channel:{self.channel}")
                 break
@@ -118,7 +118,7 @@ class MessageMiddlewareExchange(MessageMiddleware):
                     )
                 )
                 self.channel = self.connection.channel()
-                self.channel.queue_declare(queue=self.queue_name, durable=True)
+                self.channel.queue_declare(queue=self.queue_name, durable=False)
 
                 def _on_return(ch, method, properties, body):
                     logger.error(f"UNROUTABLE: exchange={method.exchange} rk={method.routing_key} len={len(body)}")
@@ -148,7 +148,7 @@ class MessageMiddlewareExchange(MessageMiddleware):
     
     def bind_to_exchange(self, exchange_name, exchange_type: str = "direct", routing_key: str = ""):
         """Binding queue to a certain exchange with a given routing key"""
-        self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=True)
+        self.channel.exchange_declare(exchange=exchange_name, exchange_type=exchange_type, durable=False)
         self.channel.queue_bind(exchange=exchange_name, queue=self.queue_name, routing_key=routing_key)    
 
     def start_consuming(self, on_message_callback):

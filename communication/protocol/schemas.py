@@ -31,7 +31,7 @@ CLEAN_SCHEMAS: Dict[str, List[str]] = {
     ],
 
     "transaction_items.clean": [
-        "transaction_id", "item_id", "subtotal", "created_at"
+        "transaction_id", "item_id", "quantity", "subtotal", "created_at"
     ],
 
     "stores.clean": [
