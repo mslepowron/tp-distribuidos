@@ -569,10 +569,13 @@ class UserJoin(Join):
                     self.source_file_index = self._build_store_join_index()
                     self.source_file_closed = True
 
-                    for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
-                        joined = self._join_batch(batch)
-                        # logger.info(f"row: {rows[0]}")
-                        self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
+                    # for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
+                    #     joined = self._join_batch(batch)
+                    #     # logger.info(f"row: {rows[0]}")
+                    #     self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
+                    rows_2 = self._fetch_users_for_index(self.files["users"])
+                    joined = self._join_batch(rows_2)
+                    self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
 
                 elif source.startswith("users"):
                     if self.source_file_closed:
@@ -659,3 +662,23 @@ class UserJoin(Join):
                     batch = []
             if batch:
                 yield batch
+
+    def _fetch_users_for_index(self, user_file: Path) -> List[Dict[str, str]]:
+        """Lee solo los usuarios que están en el índice"""
+        if not user_file.exists() or user_file.stat().st_size == 0:
+            return []
+
+        needed_users = set(self.source_file_index.keys())
+        result = []
+
+        with user_file.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                user_id = str(int(float(row.get("user_id")))) if row.get("user_id") else None
+                if user_id in needed_users:
+                    result.append(row)
+                    # opcional: si solo querés 1 fila por user_id
+                    needed_users.remove(user_id)
+                    if not needed_users:
+                        break
+        return result
