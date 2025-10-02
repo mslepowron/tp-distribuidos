@@ -1,12 +1,13 @@
 import json
 import logging
 import os
-from middleware.rabbitmq.mom import MessageMiddlewareQueue, MessageMiddlewareExchange
-from lib.filterFactory import FilterFactory
+from pathlib import Path
+from middleware.rabbitmq.mom import MessageMiddlewareExchange
+from lib.topFactory import TopFactory
 
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("filter-main")
+logger = logging.getLogger("top-main")
 
 def parse_json_env(name, default=None):
     raw = os.getenv(name)
@@ -20,8 +21,8 @@ def parse_json_env(name, default=None):
 
 def main():
     try:
-        filter_type = os.getenv("FILTER_TYPE")
-        queue_name = os.getenv("QUEUE_NAME", f"{filter_type.lower()}_q")
+        top_type = os.getenv("TOP_TYPE")
+        queue_name = os.getenv("QUEUE_NAME", f"{top_type.lower()}_q")
 
         input_bindings  = parse_json_env("INPUT_BINDINGS", [])
         output_exchange = os.getenv("OUTPUT_EXCHANGE", "")
@@ -38,13 +39,12 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        logger.info(f"ROUTING KEYS IN MAIN {output_rks}")
-        f = FilterFactory.create(filter_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
+        t = TopFactory.create(top_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
 
-        f.start()
+        t.start()
 
     except Exception as e:
-        logger.error(f"Fallo al inicializar filter: {e}")
+        logger.error(f"Failed to initialize top: {e}")
 
 if __name__ == "__main__":
     main()

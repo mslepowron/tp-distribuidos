@@ -5,16 +5,23 @@ services:
       dockerfile: rabbitmq.dockerfile
     ports:
       - 15672:15672
-      #- "5672:5672" # conexión AMQP (que usa Pika por ejemplo, pero creo que si dockerizamos todo y creamos una red del tp esto no es necesario)
     networks:
       - coffee_analysis_net
+    healthcheck:
+      test: [ "CMD", "rabbitmqctl", "status" ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+  #  ---------------------------------------
   app_controller:
     build:
       context: .
       dockerfile: app_controller/Dockerfile
     depends_on:
-      - rabbitmq
-      - filter_year
+      rabbitmq:
+        condition: service_healthy
+      filter_year:
+        condition: service_started
     environment:
       - CONFIG_PATH=/config/config.ini
       - STORAGE_DIR=/storage
@@ -23,6 +30,7 @@ services:
       - ./app_controller/storage:/storage
     networks:
       - coffee_analysis_net
+  #  ---------------------------------------
   filter_year:
     build:
       context: .
@@ -32,45 +40,71 @@ services:
       - QUEUE_NAME=filter_year_q
       - INPUT_BINDINGS=[["input_file_ex","direct","transactions"],["input_file_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=filter_year_ex
-      - OUTPUT_RKS=["transactions","transaction_items"]
+      - OUTPUT_RKS=["transactions", "transaction_items"]
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     networks:
       - coffee_analysis_net
-  filter_hour:
-    build:
-      context: .
-      dockerfile: workers/filter/Dockerfile
-    environment:
-      - FILTER_TYPE=Hour
-      - QUEUE_NAME=filter_hour_q
-      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
-      - OUTPUT_EXCHANGE=filter_hour_ex
-      - OUTPUT_RKS=[]
-    depends_on:
-      - rabbitmq
-    networks:
-      - coffee_analysis_net
-  filter_amount:
-    build:
-      context: .
-      dockerfile: workers/filter/Dockerfile
-    depends_on:
-      - rabbitmq
-    environment:
-      - FILTER_TYPE=Amount
-      - QUEUE_NAME=filter_amount_q
-      - INPUT_BINDINGS=[["filter_hour_ex","fanout",""]]
-      - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_amount_75_trx"]
-    networks:
-      - coffee_analysis_net
+  #  ---------------------------------------
+  # filter_hour:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/filter/Dockerfile
+  #   environment:
+  #     - FILTER_TYPE=Hour
+  #     - QUEUE_NAME=filter_hour_q
+  #     - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
+  #     - OUTPUT_EXCHANGE=filter_hour_ex
+  #     - OUTPUT_RKS=["transactions", "store_transactions"]
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   networks:
+  #     - coffee_analysis_net
+  #  --------------------------------------- Filter Q1
+  # filter_amount:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/filter/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - FILTER_TYPE=Amount
+  #     - QUEUE_NAME=filter_amount_q
+  #     - INPUT_BINDINGS=[["filter_hour_ex","direct","transactions"]]
+  #     - OUTPUT_EXCHANGE=results_ex
+  #     - OUTPUT_RKS=["q_amount_75_tx"]
+  #   networks:
+  #     - coffee_analysis_net
+  #  --------------------------------------- JOIN DE Q3
+  # join_stores:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/join/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - JOIN_TYPE=Store
+  #     - QUEUE_NAME=join_store_q
+  #     - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","direct","transactions"]]
+  #     - OUTPUT_EXCHANGE=join_stores_ex
+  #     - OUTPUT_RKS=["stores_joined", "reduce_user_purchases"]
+  #     - STORAGE_DIR=/storage
+  #   volumes:
+  #     - ./storage:/storage
+  #   networks:
+  #     - coffee_analysis_net
+  #  --------------------------------------- JOIN DE Q2
   join_menu:
     build:
       context: .
       dockerfile: workers/join/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - JOIN_TYPE=Menu
       - QUEUE_NAME=join_menu_q
@@ -82,76 +116,118 @@ services:
       - ./storage:/storage
     networks:
       - coffee_analysis_net
+  #  --------------------------------------- MAP de Q2
   map_year_month:
     build:
       context: .
       dockerfile: workers/map/Dockerfile
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
     environment:
       - MAP_TYPE=YearMonth
       - QUEUE_NAME=map_year_month_q
       - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
       - OUTPUT_EXCHANGE=map_year_month_ex
-      - OUTPUT_RKS=["quantity", "sum"]
+      - OUTPUT_RKS=["quantity", "profit"]
     networks:
       - coffee_analysis_net
-#    reduce_user_purchases:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=user_purchases
-#        - QUEUE_NAME=reduce_user_purchases_q
-#        - INPUT_BINDINGS=[["store_names_ex","direct","store_names"]] falta el de despues del join 
-#        - OUTPUT_EXCHANGE=reduce_user_purchases_ex
-#        - OUTPUT_RKS=["q_user_purchases"]
-#      networks:
-#        - coffee_analysis_net
-#    reduce_tpv:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=tpv
-#        - QUEUE_NAME=reduce_tpv_q
-#        - INPUT_BINDINGS=[["map_year_semester_ex","direct","tpv"]]
-#        - OUTPUT_EXCHANGE=reduce_tpv_ex
-#        - OUTPUT_RKS=["q_semester_tpv"]
-#      networks:
-#        - coffee_analysis_net
-#    reduce_quantity:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=quantity
-#        - QUEUE_NAME=reduce_quantity_q
-#        - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
-#        - OUTPUT_EXCHANGE=reduce_qty_ex
-#        - OUTPUT_RKS=["q_month_top_qty"]
-#      networks:
-#        - coffee_analysis_net
-#    reduce_profit:
-#      build:
-#        context: .
-#        dockerfile: workers/reduce/Dockerfile
-#      depends_on:
-#        - rabbitmq
-#      environment:
-#        - REDUCE_TYPE=profit
-#        - QUEUE_NAME=reduce_profit_q
-#        - INPUT_BINDINGS=[["map_year_month_ex","direct","sum"]]
-#        - OUTPUT_EXCHANGE=reduce_profit_ex
-#        - OUTPUT_RKS=["q_month_top_rev"]
-#      networks:
-#        - coffee_analysis_net
+  #  --------------------------------------- MAP de Q3
+  # map_year_half:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/map/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - MAP_TYPE=YearHalf
+  #     - QUEUE_NAME=map_year_half_q
+  #     - INPUT_BINDINGS=[["filter_hour_ex","direct","store_transactions"]]
+  #     - OUTPUT_EXCHANGE=map_year_half_ex
+  #     - OUTPUT_RKS=["map_half"]
+  #   networks:
+  #     - coffee_analysis_net
+  #  --------------------------------------- REDUCE Q2.1
+  reduce_quantity:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - REDUCE_TYPE=quantity
+      - QUEUE_NAME=reduce_quantity_q
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
+      - OUTPUT_EXCHANGE=reduce_qty_ex
+      - OUTPUT_RKS=["month_quantity"]
+    networks:
+      - coffee_analysis_net
+  #  --------------------------------------- REDUCE Q2.2
+  reduce_profit:
+    build:
+      context: .
+      dockerfile: workers/reduce/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - REDUCE_TYPE=profit
+      - QUEUE_NAME=reduce_profit_q
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
+      - OUTPUT_EXCHANGE=reduce_profit_ex
+      - OUTPUT_RKS=["month_profit"]
+    networks:
+      - coffee_analysis_net
+  #  --------------------------------------- REDUCE Q3
+  # reduce_tpv:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - REDUCE_TYPE=tpv
+  #     - QUEUE_NAME=reduce_tpv_q
+  #     - INPUT_BINDINGS=[["map_year_half_ex","direct","map_half"]]
+  #     - OUTPUT_EXCHANGE=results_ex
+  #     - OUTPUT_RKS=["q_semester_tpv"]
+  #   networks:
+  #     - coffee_analysis_net
+  #  --------------------------------------- TOP Q2.1
+  top_selling_items:
+    build:
+      context: .
+      dockerfile: workers/top/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - TOP_TYPE=TopSellingItems
+      - QUEUE_NAME=top_selling_items_q
+      - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_month_top_qty"]
+    networks:
+      - coffee_analysis_net
+  #  --------------------------------------- TOP Q2.2
+  top_revenue_generating_items:
+    build:
+      context: .
+      dockerfile: workers/top/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - TOP_TYPE=TopRevenueGeneratinItems
+      - QUEUE_NAME=top_generating_items_q
+      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
+      - OUTPUT_EXCHANGE=results_ex
+      - OUTPUT_RKS=["q_month_top_rev"]
+    networks:
+      - coffee_analysis_net
 networks:
   coffee_analysis_net:
     ipam:

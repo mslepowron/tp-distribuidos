@@ -33,7 +33,7 @@ def deserialize_message(message_bytes: bytes) -> Tuple[Header, List[Dict[str, st
         # limpiar cada valor (sacar comillas simples/dobles y espacios extra)
         fieldnames = [p.strip().strip("'").strip('"') for p in parts]
     except KeyError:
-        raise PayloadError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+        raise PayloadError(f"Schema '{raw_fieldnames}' not found SCHEMAS")
 
     try:
         if not payload_bytes.strip():

@@ -10,11 +10,9 @@ from communication.protocol.message import Header
 
 logger = logging.getLogger("join")
 
-#TODO: Este output esta hardcodeade para este caso. Habria que hacer algo mas dinamic.
-
 class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
-    OUTPUT_FIELDS: List[str] = []
+    # OUTPUT_FIELDS: List[str] = []
     OUTPUT_FILE_BASENAME: str = None  #archivo donde se guarda el resultado del join
 
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
@@ -35,11 +33,16 @@ class Join:
                 f.touch()
 
         self.join_out_file: Path = storage / self.OUTPUT_FILE_BASENAME
+
+        self.users_received = False
+
+        logger.info(f"en el init {output_rks}")
         if isinstance(output_rks, str):
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
 
+        logger.info(f"en el init2 {self.output_rk}")
         for f in self.files.values():
             if not f.exists():
                 f.touch()
@@ -80,7 +83,7 @@ class Join:
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
     
-    def _send_rows(self, header, source, rows, routing_keys=None):
+    def _send_rows(self, header, source, rows, routing_keys=None, query_id=None):
         if not rows:
             return
 
@@ -103,7 +106,7 @@ class Join:
 
             out_header = Header({
                 "message_type": "DATA",
-                "query_id": header.fields.get("query_id"),
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": header.fields.get("stage"),
                 "part": header.fields.get("part"),
                 "seq": header.fields.get("seq"),
@@ -121,19 +124,20 @@ class Join:
                     self.result_mw.send_to(self.output_exchange, rk, payload)
 
             logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rks}")
+            logger.info(f"rk={self.output_rk}")
         except Exception as e:
             logger.error(f"Error sending results: {e}")
     
-    def _forward_eof(self, header, stage, routing_keys=None):
+    def _forward_eof(self, header, stage, routing_keys=None, query_id=None):
         try:
             out_header = Header({
                 "message_type": header.fields["message_type"],
-                "query_id": header.fields["query_id"],
-                "stage": "JoinMenu",
+                "query_id": query_id if query_id is not None else header.fields["query_id"],
+                "stage": stage,
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema":  header.fields["schema"],
-                "source": header.fields["source"],
+                "source": stage,
             })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
@@ -141,6 +145,7 @@ class Join:
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
+                    logger.info(f"Envio eof a --->{rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -168,7 +173,7 @@ class Join:
 
 class MenuJoin(Join):
     REQUIRED_STREAMS = ("menu_items", "transaction_items")
-    OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
+    # OUTPUT_FIELDS = ["transaction_id", "created_at", "item_id", "item_name", "subtotal"]
     OUTPUT_FILE_BASENAME = "menu_join.csv"
 
     def define_schema(self, header):
@@ -180,7 +185,11 @@ class MenuJoin(Join):
             # limpiar cada valor
             fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.append("item_name")
+            if "quantity" not in fieldnames:
+                fieldnames.append("quantity")
+
+            if "item_name" not in fieldnames:
+                fieldnames.append("item_name")
 
             return fieldnames
         except KeyError:
@@ -189,25 +198,26 @@ class MenuJoin(Join):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-            
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
-            message_schema = header.fields.get("schema")
 
-            # EOF
+            # -------------------- EOF --------------------
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
                 if source.startswith("menu_items"):
+                    # Construyo el índice del menú
                     self.source_file_index = self._build_menu_index()
                     self.source_file_closed = True
 
-                    for batch in self._read_batches(self.files["transaction_items"], 1000): #TODO: Esta hardcodeado el batch
+                    # Hago join de todo lo acumulado de transacciones
+                    for batch in self._read_batches(self.files["transaction_items"], 1000):
                         joined = self._join_batch(batch)
                         self._send_rows(header, "menu_join", joined, self.output_rk)
 
                 elif source.startswith("transaction_items"):
+                    # Cuando ya tengo menú y me llega EOF de transacciones, forward EOF
                     if self.source_file_closed:
                         self._forward_eof(header, "menu_join", routing_keys=self.output_rk)
 
@@ -215,14 +225,16 @@ class MenuJoin(Join):
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            # DATA
+            # -------------------- DATA --------------------
             if source.startswith("menu_items"):
                 self._append_rows(self.files["menu_items"], rows)
 
             elif source.startswith("transaction_items"):
                 if not getattr(self, "source_file_closed", False):
+                    # Guardo mientras no tengo menú completo
                     self._append_rows(self.files["transaction_items"], rows)
                 else:
+                    # Ya tengo menú indexado → hago join directo
                     joined = self._join_batch(rows)
                     self._send_rows(header, "menu_join", joined, self.output_rk)
 
@@ -274,6 +286,7 @@ class MenuJoin(Join):
                 "transaction_id": t.get("transaction_id", t.get("trx_id", "")),
                 "created_at": t.get("created_at", ""),
                 "item_id": item_id,
+                "quantity": t.get("quantity", 0),
                 "subtotal": t.get("subtotal", t.get("amount", "")),
                 "item_name": self.source_file_index.get(item_id, ""),
             })
@@ -295,46 +308,337 @@ class MenuJoin(Join):
                 yield batch
 
 class StoreJoin(Join):
+    REQUIRED_STREAMS = ("stores", "transactions")
+    # OUTPUT_FIELDS = ["transaction_id", "created_at", "final_amount", "store_id", "store_name" ]
+    OUTPUT_FILE_BASENAME = "store_join.csv"
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("store_id")
+            fieldnames.append("store_name")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+        except Exception as e:
+            logger.error(f"Error define_schema: {e}")
+
+    def _send_rows(self, header, source, rows, routing_keys=None):
+        if not rows:
+            return
+
+        try:
+            if routing_keys == "reduce_user_purchases":
+                schema = ["transaction_id", "store_id", "store_name", "user_id"]
+            else:
+                schema = self.define_schema(header)
+
+            if not schema or any(s == "" for s in schema):
+                first_row = rows[0]
+                schema = list(first_row.keys())
+
+            normalized_rows = []
+            for row in rows:
+                norm_row = {}
+                for field in schema:
+                    value = row.get(field, "")
+                    norm_row[field] = str(value)
+                normalized_rows.append(norm_row)
+
+            out_header = Header({
+                "message_type": "DATA",
+                "query_id": header.fields.get("query_id"),
+                "stage": header.fields.get("stage"),
+                "part": header.fields.get("part"),
+                "seq": header.fields.get("seq"),
+                "schema": schema,
+                "source": source,
+            })
+
+            payload = serialize_message(out_header, normalized_rows, schema)
+
+            self.result_mw.send_to(self.output_exchange, routing_keys, payload)
+
+            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={routing_keys}")
+            logger.info(f"rk={routing_keys}")
+        except Exception as e:
+            logger.error(f"Error sending results: {e}")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
+            
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+            message_schema = header.fields.get("schema")
 
-            if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=[])  # fanout
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+            logger.info(f"Schema recibido: {message_schema}")
+
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                if source.startswith("stores"):
+                    self.source_file_index = self._build_stores_index()
+                    self.source_file_closed = True
+
+                    for batch in self._read_batches(self.files["transactions"], 1000): #TODO: Esta hardcodeado el batch
+                        joined, joined2 = self._join_batch(batch)
+                        self._send_rows(header, "store_join", joined, self.output_rk[0])
+                        self._send_rows(header, "store_join", joined, self.output_rk[1])
+
+                elif source.startswith("transactions"):
+                    if self.source_file_closed:
+                        self._forward_eof(header, "store_join", routing_keys=self.output_rk)
+
+                if ch is not None and hasattr(method, "delivery_tag"):
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            filtered = []
-            for row in rows:
-                hour = int(row["created_at"].split(" ")[1].split(":")[0])
-                if 6 <= hour < 23:
-                    filtered.append(row)
+            # DATA
+            if source.startswith("stores"):
+                self._append_rows(self.files["stores"], rows)
 
-            self._send_rows(header, filtered, routing_keys=[])  # fanout
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            elif source.startswith("transactions"):
+                if not getattr(self, "source_file_closed", False):
+                    # si todavia no me llego el archivo pivot entero almaceno las rows
+                    self._append_rows(self.files["transactions"], rows)
+                else:
+                    joined, joined2 = self._join_batch(rows)
+                    self._send_rows(header, "store_join", joined, self.output_rk[0])
+                    self._send_rows(header, "store_join", joined2, self.output_rk[1])
+
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"HourFilter error: {e}")
+            logger.error(f"StoreJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def _build_stores_index(self) -> Dict[str, str]:
+        try:
+            """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
+            menu_rows = self._read_rows(self.files["stores"])
+
+            def pick_store_id(row):
+                return row.get("store_id") or row.get("id") or ""
+
+            def pick_store_name(row):
+                raw_name = row.get("store_name") or row.get("name") or ""
+                # Si es un string que parece lista, extraigo el primer elemento
+                try:
+                    parsed = ast.literal_eval(raw_name)
+                    if isinstance(parsed, list) and parsed:
+                        return parsed[0]
+                except (ValueError, SyntaxError):
+                    pass
+                return raw_name
+
+            index = {}
+            for m in menu_rows:
+                mid = pick_store_id(m)
+                nm = pick_store_name(m)
+                if mid and nm:
+                    index[mid] = nm
+            logger.info(f"Store index construido con {len(index)} items")
+            return index
+        except Exception as e:
+            logger.error(f"Error build menu index: {e}")
+
+    def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        try:
+            """ Hace el join sobre un batch de transacciones usando el menú indexado """
+            if not self.source_file_index:
+                return [], []
+
+            out_filter = []
+            out_reduce = []
+
+            for t in trx_rows:
+                store_id = t.get("store_id")
+
+                if not store_id:
+                    continue
+
+                out_filter.append({
+                    "transaction_id": t.get("transaction_id"),
+                    "created_at": t.get("created_at", ""),
+                    "store_id": store_id,
+                    "final_amount": t.get("final_amount", t.get("amount", "")),
+                    "store_name": self.source_file_index.get(store_id, "")
+                })
+
+                out_reduce.append({
+                    "transaction_id": t.get("transaction_id"),
+                    "store_id": store_id,
+                    "store_name": self.source_file_index.get(store_id, ""),
+                    "user_id": t.get("user_id")
+                })
+            return out_filter, out_reduce
+        except Exception as e:
+            logger.error(f"Error join batch: {e}")
+
+    def _read_batches(self, file_path: Path, batch_size: int):
+        try:
+            """  Itera el CSV en batches para no cargar todo en memoria """
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                return
+            with file_path.open("r", newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                batch = []
+                for row in reader:
+                    batch.append(row)
+                    if len(batch) >= batch_size:
+                        yield batch
+                        batch = []
+                if batch:
+                    yield batch
+        except Exception as e:
+            logger.error(f"Error read batches: {e}")
 
 class UserJoin(Join):
+    # como transaction va a ser un top 3 ahora el qe espero es el users
+    REQUIRED_STREAMS = ("user_stores", "users") 
+    # OUTPUT_FIELDS = ["store_name", "birthdate" ]
+    OUTPUT_FILE_BASENAME = "users_join.csv"
+    
+
+    # user_id deberia ser el pivot
+
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("birthdate")
+
+            fieldnames.remove("user_purchases")
+            fieldnames.remove("user_id")
+
+            logger.info(f"SCHEMAAAA: {schema}")
+            logger.info(f"fieldnames: {fieldnames}")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
+            
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+            message_schema = header.fields.get("schema")
 
-            if header.fields.get("message_type") == "EOF":
-                self._forward_eof(header, routing_keys=["q_amount_75_trx"])
-                ch.basic_ack(delivery_tag=method.delivery_tag)
+            # EOF
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                if source.startswith("store"):
+                    self.source_file_index = self._build_store_join_index()
+                    self.source_file_closed = True
+
+                    for batch in self._read_batches(self.files["users"], 1000): #TODO: Esta hardcodeado el batch
+                        joined = self._join_batch(batch)
+                        # logger.info(f"row: {rows[0]}")
+                        self._send_rows(header, "users_join", joined, self.output_rk, self.output_rk[0])
+
+                elif source.startswith("users"):
+                    if self.source_file_closed:
+                        self._forward_eof(header, "users_join", self.output_rk, self.output_rk[0])
+
+                if ch is not None and hasattr(method, "delivery_tag"):
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
 
-            filtered = []
-            for row in rows:
-                final_amount = float(row.get("final_amount") or 0.0)
-                if final_amount >= 75.0:
-                    filtered.append(row)
+            logger.info(f"Recibo data: '{source}' proveniente de: {message_stage} y source {source}")
+            # DATA
+            if source.startswith("store"): #archivo que espero que me llegue
+                # logger.info(f"row: {rows[0]}")
+                self._append_rows(self.files["user_stores"], rows)
 
-            self._send_rows(header, filtered, routing_keys=["q_amount_75_trx"])
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            elif source.startswith("users"): #archivo que llega en batchs
+                if not getattr(self, "source_file_closed", False):
+                    self._append_rows(self.files["users"], rows)
+                else:
+                    joined = self._join_batch(rows)
+                    # logger.info(f"row: {rows[0]}")
+                    self._send_rows(header, "users_join", joined, self.output_rk)
+
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
         except Exception as e:
-            logger.error(f"AmountFilter error: {e}")
+            logger.error(f"UserJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
+
+    def _build_store_join_index(self) -> Dict[str, str]:
+        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
+        logger.info("Revisar 1")
+        rows = self._read_rows(self.files["user_stores"])
+
+        index = {}
+        for row in rows:
+            # mid = float(row.get("user_id"))
+            # mid = row.get("user_id")
+            mid = str(int(float(row.get("user_id")))) if row.get("user_id") else None
+
+            logger.info(f"Valor ---> {mid}")
+            nm = row.get("store_name")
+            if mid and nm:
+                index[mid] = nm
+        logger.info(f"Store Users index construido con {len(index)} items")
+        return index
+
+    def _join_batch(self, trx_rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menú indexado """
+        if not self.source_file_index:
+            return []
+        out = []
+        for t in trx_rows:
+            # user_id = t.get("user_id")
+            user_id = str(int(float(t.get("user_id")))) if t.get("user_id") else None
+
+            if not user_id:
+                continue
+
+            if not self.source_file_index.get(user_id):
+                # logger.info(f"no esta")
+                continue
+                
+            out.append({
+                "store_name": self.source_file_index.get(user_id, ""),
+                "birthdate": t.get("birthdate"),
+            })
+        return out
+
+    def _read_batches(self, file_path: Path, batch_size: int):
+        """ Itera el CSV en batches para no cargar todo en memoria """
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            return
+        with file_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            batch = []
+            for row in reader:
+                batch.append(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
