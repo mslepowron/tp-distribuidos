@@ -26,7 +26,7 @@ Se puede ver la UI de rabbit desde la web con: http://localhost:15672
 ## Tests Unitarios del Middleware
 1. Levantar el docker compose de rabbit para los tests:
     ```bash
-        docker compose -f docker-compose-test.yaml up -d
+        docker compose -f docker-compose-tests.yaml up -d
     ```
 2. Crear un entorno virtual para correr los tests: 
     ```bash
@@ -40,4 +40,8 @@ Se puede ver la UI de rabbit desde la web con: http://localhost:15672
 4. Correr los tests
     ```bash
         pytest -v tests/
+    ```
+5. Detener el container de test:
+    ```bash
+        docker compose -f docker-compose-tests.yaml stop -t 1
     ```
