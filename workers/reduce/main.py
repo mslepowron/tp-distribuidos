@@ -41,8 +41,7 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
 
-        storage = Path(os.getenv("STORAGE_DIR", "storage"))
-        f = ReduceFactory.create(reduce_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
+        f = ReduceFactory.create(reduce_type, mw_in, mw_out, output_exchange, output_rks, input_bindings)
         f.start()
 
     except Exception as e:

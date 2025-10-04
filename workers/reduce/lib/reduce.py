@@ -13,7 +13,7 @@ logger = logging.getLogger("reduce")
 class Reduce:
     REQUIRED_STREAMS: Tuple[str, str] = ()
 
-    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
+    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings):
         self.mw = mw_in
         self.result_mw = mw_out
         self.output_exchange = output_exchange
@@ -23,6 +23,7 @@ class Reduce:
         else:
             self.output_rk = output_rks or []
         self.schema_out = None
+        self.accumulator: dict[tuple[str, str], int] = defaultdict(int)
 
     def start(self):
         try:
@@ -114,23 +115,15 @@ class Reduce:
 # ----------------- SUBCLASES -----------------
 
 class QuantityReducer(Reduce):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Diccionario en memoria: (ym, item) -> qty
-        self.accumulator: dict[tuple[str, str], int] = defaultdict(int)
-        self.eofs_received = 0
-        self.eofs_expected = 1  # ajustá según cuántos productores tengas
 
     def callback(self, ch, method, properties, body):
         header, rows = deserialize_message(body)
 
         # Caso EOF
         if header.fields.get("message_type") == "EOF":
-            self.eofs_received += 1
-            if self.eofs_received >= self.eofs_expected:
-                # Emitir todo lo que se acumuló en memoria
-                self._aggregate_and_emit(header)
-                self._forward_eof(header, "QuantityReducer", self.output_rk)
+            # Emitir todo lo que se acumuló en memoria
+            self._aggregate_and_emit(header)
+            self._forward_eof(header, "QuantityReducer", self.output_rk)
             ch.basic_ack(delivery_tag=method.delivery_tag)
             return
 
@@ -139,13 +132,10 @@ class QuantityReducer(Reduce):
             ym = row.get("year_month_created_at")
             item = row.get("item_name")
             if ym and item:
-                self._accumulate_row(ym, item)
+                self.accumulator[(ym, item)] += 1
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def _accumulate_row(self, ym: str, item: str, qty: int = 1):
-        """Acumula en memoria"""
-        self.accumulator[(ym, item)] += qty
 
     def _aggregate_and_emit(self, header):
         """Convierte el diccionario en filas y las envía todas."""
@@ -160,9 +150,8 @@ class QuantityReducer(Reduce):
         if result_rows:
             header.fields["schema"] = "['year_month_created_at','item_name','selling_qty']"
             header.fields["stage"] = "ReduceQuantity"
-            self._send_rows(header, "quantity_reduce", result_rows, routing_keys=self.output_rk)
+            self._send_rows(header, "quantity_reduce", result_rows, self.output_rk)
 
-        # Limpieza
         self.accumulator.clear()
 
 
@@ -170,8 +159,45 @@ class QuantityReducer(Reduce):
 
 
 class ProfitReducer(Reduce):
+
     def callback(self, ch, method, properties, body):
-        logger.info(f"NO IMPLEMENTADA")
+        header, rows = deserialize_message(body)
+
+        # Caso EOF
+        if header.fields.get("message_type") == "EOF":
+            # Emitir todo lo que se acumuló en memoria
+            self._aggregate_and_emit(header)
+            self._forward_eof(header, "ProfitReducer", self.output_rk)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        # Acumular las filas
+        for row in rows:
+            ym = row.get("year_month_created_at")
+            item = row.get("item_name")
+            subtotal = float(row.get("subtotal") or 0.0)
+            if ym and item:
+                self.accumulator[(ym, item)] += subtotal
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+    def _aggregate_and_emit(self, header):
+        """Convierte el diccionario en filas y las envía todas."""
+        result_rows = []
+        for (ym, item), value in self.accumulator.items():
+            result_rows.append({
+                "year_month_created_at": ym,
+                "item_name": item,
+                "profit_sum": value
+            })
+
+        if result_rows:
+            header.fields["schema"] = "['year_month_created_at','item_name','profit_sum']"
+            header.fields["stage"] = "ReduceProfit"
+            self._send_rows(header, "profit_reduce", result_rows, self.output_rk)
+
+        self.accumulator.clear()
     
     
 
