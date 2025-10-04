@@ -17,11 +17,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app_controller")
 
-BASE_DIR = Path(__file__).resolve().parent.parent  # sube de app_controller a tp-distribuidos
-CSV_FILE = BASE_DIR / "transactions.csv"
-
-STORAGE_DIR = Path(os.getenv("STORAGE_DIR", "storage"))
-BATCH_SIZE = 100000 #TODO> Varialbe de entorno
+BATCH_SIZE = 50000
 
 SCHEMA_BY_RK = {
     "transactions": "transactions.clean",
