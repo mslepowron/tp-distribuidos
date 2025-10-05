@@ -209,33 +209,6 @@ class TopStoreUserPurchases(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
 
-    def update(self, ym, item, suma):
-        # Caso: aún no llegué a n elementos
-        if len(self.top) < self.top_lenght:
-            self.top.append((ym, item, suma))
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            logger.info(f"Inserto directo porque no llegue al limite del top")
-            self.top.sort(key=lambda x: x[2], reverse=True)
-            return
-
-        # Caso: lista llena, comparo con el minimo (ultimo elemento)
-        if suma > self.top[-1][1]:
-            self.top[-1] = (ym, item, suma)
-            logger.info(f"Inserto y ordeno")
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            self.top.sort(key=lambda x: x[2], reverse=True)
-
-    def get_top(self):
-        return self.top
-    
-    def to_csv(self, toped):
-        """Convierte el top a formato CSV en un string"""
-        result_rows = [
-                {"store_name": ym, "user_id": item, "user_purchases": sum}
-                for ym, item, sum in toped
-                ]
-        return result_rows
-
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)

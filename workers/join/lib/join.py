@@ -20,27 +20,14 @@ class Join:
         self.output_exchange = output_exchange
         self.input_bindings = input_bindings
         
-        self.source_file_index = None  # dict con  un _id y un nombre (ej item_id, item_name o store_id, store_name)
+        self.source_file_index: Dict[str, str] = {}
         self.source_file_closed = False
         eof_count = 0
-        #define un archivo para almacenar en c/archivo un tipo de stream de datos que necesita
-        self.files: Dict[str, Path] = {s: storage / f"{s}.csv" for s in self.REQUIRED_STREAMS}
-
-        # chequea que existan los archivos vacios
-        for f in self.files.values():
-            if not f.exists():
-                f.touch()
-
-        self.join_out_file: Path = storage / self.OUTPUT_FILE_BASENAME
 
         if isinstance(output_rks, str):
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
-
-        for f in self.files.values():
-            if not f.exists():
-                f.touch()
 
     def start(self):
         try:
@@ -146,6 +133,8 @@ class Join:
         if not rows:
             return
 
+        # Crear el directorio si no existe
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         file_exists = file_path.exists() and file_path.stat().st_size > 0
         
         fieldnames = list(rows[0].keys())
@@ -156,26 +145,6 @@ class Join:
                 writer.writeheader()
             writer.writerows(rows)
 
-    def _read_rows(self, file_path: Path) -> List[Dict[str, str]]:
-        """Carga TODO el CSV (no usar para transacciones grandes, solo para menu)"""
-        if not file_path.exists() or file_path.stat().st_size == 0:
-            return []
-        with file_path.open("r", newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
-    
-    def _build_index(self, col1, col2) -> Dict[str, str]:
-        """ Construye el índice de item_id + item_name una vez que tengo todo el menu """
-        menu_rows = self._read_rows(self.files[self.REQUIRED_STREAMS[self.INPUT_FILE_TO_STORAGE]])
-
-        index = {}
-        for m in menu_rows:
-            mid = m.get(col1)
-            name = m.get(col2)
-            if mid and name:
-                index[mid] = name
-
-        logger.info(f"Menu index construido con {len(index)} items")
-        return index
 
     # para cada fila en el batch creo una nueva
     def _join_batch(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -219,10 +188,8 @@ class Join:
 # ----------------- SUBCLASES -----------------
 
 class MenuJoin(Join):
-    REQUIRED_STREAMS = ("menu_items", "transaction_items")
-    OUTPUT_FILE_BASENAME = "menu_join.csv"
-    INPUT_FILE_TO_STORAGE = 0
-    INPUT_FILE_IN_BATCHS = 1
+    PIVOT_FILE = "menu_items"
+    FILE_IN_BATCHS = "transaction_items"
     SOURCE = "menu_join"
     BATCH_SZ = 1000
 
@@ -249,6 +216,42 @@ class MenuJoin(Join):
             return fieldnames
         except KeyError:
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+    def on_eof_message(self, source, header):
+        if source.startswith(self.PIVOT_FILE):
+            self.source_file_closed = True
+            storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+
+            for batch in self._read_batches(storage_path, self.BATCH_SZ):
+                # Joineo los batches que llegaron antes del EOF del archivo a almacenar
+                joined = self._join_batch(batch)
+                self.print_joined_rows(joined)
+                self._send_rows(header, self.SOURCE, joined, self.output_rk)
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
+            if self.source_file_closed:
+                self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
+
+            return True
+
+        return False
+
+    def on_data_message(self, source, header, rows):
+        if source.startswith(self.PIVOT_FILE):
+                self.update_index(rows)
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            if not self.source_file_closed:
+                storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+                self._append_rows(storage_path, rows)
+            else:
+                joined = self._join_batch(rows)
+                self.print_joined_rows(joined)
+                self._send_rows(header, self.SOURCE, joined, self.output_rk)
+
+            return True
+        return False
     
     def callback(self, ch, method, properties, body):
         try:
@@ -262,38 +265,15 @@ class MenuJoin(Join):
             if message_type == "EOF":
                 logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
 
-                if source.startswith(self.REQUIRED_STREAMS[self.INPUT_FILE_TO_STORAGE]):
-                    self.source_file_index = self._build_index("item_id","item_name")
-                    self.source_file_closed = True
+                res = self.on_eof_message(source, header)
 
-                    for batch in self._read_batches(self.files[self.REQUIRED_STREAMS[self.INPUT_FILE_IN_BATCHS]], self.BATCH_SZ): #TODO: Esta hardcodeado el batch
-                        # Joineo los batches que llegaron antes del EOF del archivo a almacenar
-                        joined = self._join_batch(batch)
-                        self.print_joined_rows(joined)
-                        self._send_rows(header, self.SOURCE, joined, self.output_rk)
-
-                elif source.startswith(self.REQUIRED_STREAMS[self.INPUT_FILE_IN_BATCHS]):
-                    # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
-                    if self.source_file_closed:
-                        self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
-
+                if res:
                     if ch is not None and hasattr(method, "delivery_tag"):
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                     return
 
-            # DATA
-            if source.startswith(self.REQUIRED_STREAMS[self.INPUT_FILE_TO_STORAGE]):
-                # almacenamos las filas
-                self._append_rows(self.files[self.REQUIRED_STREAMS[self.INPUT_FILE_TO_STORAGE]], rows)
-
-            elif source.startswith(self.REQUIRED_STREAMS[self.INPUT_FILE_IN_BATCHS]):
-                if not self.source_file_closed:
-                    self._append_rows(self.files[self.REQUIRED_STREAMS[self.INPUT_FILE_IN_BATCHS]], rows)
-                else:
-                    joined = self._join_batch(rows)
-                    self.print_joined_rows(joined)
-                    self._send_rows(header, self.SOURCE, joined, self.output_rk)
-
+            res = self.on_data_message(source, header, rows)
+            if res:
                 if ch is not None and hasattr(method, "delivery_tag"):
                         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -301,6 +281,13 @@ class MenuJoin(Join):
             logger.error(f"MenuJoin error: {e}")
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def update_index(self, rows, col1=None, col2=None):
+        for row in rows:
+            item_id = row.get("item_id")
+            item_name = row.get("item_name")
+            if item_id and item_name:
+                self.source_file_index[item_id] = item_name
 
     def _join_batch(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """ Hace el join sobre un batch de transacciones usando el menu indexado """
