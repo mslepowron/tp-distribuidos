@@ -1,0 +1,9 @@
+FROM rabbitmq-python-base:0.0.1
+
+WORKDIR /root/tp-distribuidos
+
+COPY . .
+
+ENV PYTHONPATH=/root/tp-distribuidos
+# Ejecutamos el archivo principal
+CMD ["python3", "gateway/main.py"]
