@@ -7,7 +7,6 @@ import copy
 
 logger = logging.getLogger("top")
 
-
 class Top:
     def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings):
         self.mw = mw_in
@@ -18,8 +17,7 @@ class Top:
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
-        self.top_lenght = 3
-        self.top = []
+        self.top = {}
 
     def start(self):
         try:
@@ -109,29 +107,21 @@ class Top:
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
 
+    def update(self, ym, item, value):
+        # Si no existe el mes o este item tiene mayor count que el actual guardado
+        if ym not in self.top or value > self.top[ym][1]:
+            self.top[ym] = (item, value)
+
+
+    def get_top(self):
+        return [(ym, item, value) for ym, (item, value) in self.top.items()]
+
 # ----------------- SUBCLASES -----------------
 
 class TopSellingItems(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
 
-    def update(self, ym, item, count):
-        # Caso: aún no llegué a n elementos
-        if len(self.top) < self.top_lenght:
-            self.top.append((ym, item, count))
-            # hago el sort con el numero 2 porque es donde se encuentra el count
-            self.top.sort(key=lambda x: x[2], reverse=True)
-            return
-
-        # Caso: lista llena, comparo con el minimo (ultimo elemento)
-        if count > self.top[-1][1]:
-            self.top[-1] = (ym, item, count)
-            # hago el sort con el numero 2 porque es donde se encuentra el count
-            self.top.sort(key=lambda x: x[2], reverse=True)
-
-    def get_top(self):
-        return self.top
-    
     def to_csv(self, toped):
         """Convierte el top a formato CSV en un string"""
         result_rows = [
@@ -174,29 +164,12 @@ class TopSellingItems(Top):
 class TopRevenueGeneratingItems(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
-
-    def update(self, ym, item, suma):
-        # Caso: aún no llegué a n elementos
-        if len(self.top) < self.top_lenght:
-            self.top.append((ym, item, suma))
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            self.top.sort(key=lambda x: x[2], reverse=True)
-            return
-
-        # Caso: lista llena, comparo con el minimo (ultimo elemento)
-        if suma > self.top[-1][1]:
-            self.top[-1] = (ym, item, suma)
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            self.top.sort(key=lambda x: x[2], reverse=True)
-
-    def get_top(self):
-        return self.top
-    
+ 
     def to_csv(self, toped):
         """Convierte el top a formato CSV en un string"""
         result_rows = [
-                {"year_month_created_at": ym, "item_name": item, "profit_sum": sum}
-                for ym, item, sum in toped
+                {"year_month_created_at": ym, "item_name": item, "profit_sum": value}
+                for ym, item, value in toped
                 ]
         return result_rows
 
@@ -235,33 +208,6 @@ class TopRevenueGeneratingItems(Top):
 class TopStoreUserPurchases(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
-
-    def update(self, ym, item, suma):
-        # Caso: aún no llegué a n elementos
-        if len(self.top) < self.top_lenght:
-            self.top.append((ym, item, suma))
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            logger.info(f"Inserto directo porque no llegue al limite del top")
-            self.top.sort(key=lambda x: x[2], reverse=True)
-            return
-
-        # Caso: lista llena, comparo con el minimo (ultimo elemento)
-        if suma > self.top[-1][1]:
-            self.top[-1] = (ym, item, suma)
-            logger.info(f"Inserto y ordeno")
-            # hago el sort con el numero 2 porque es donde se encuentra el suma
-            self.top.sort(key=lambda x: x[2], reverse=True)
-
-    def get_top(self):
-        return self.top
-    
-    def to_csv(self, toped):
-        """Convierte el top a formato CSV en un string"""
-        result_rows = [
-                {"store_name": ym, "user_id": item, "user_purchases": sum}
-                for ym, item, sum in toped
-                ]
-        return result_rows
 
     def callback(self, ch, method, properties, body):
         try:

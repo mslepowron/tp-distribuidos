@@ -99,6 +99,18 @@ class Map:
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
+    
+
+    def print_rows(self, rows):
+        logger.info(f"-----------------------------------------------------------------------------------------------------")
+        logger.info(f"Imprimo rows")
+        n=0
+        for row in rows:
+            n+=1
+            logger.info(f"Row_{n}: {row}")
+        logger.info(f"-----------------------------------------------------------------------------------------------------")
+
+
         
 
 # ----------------- SUBCLASES -----------------
@@ -132,6 +144,7 @@ class MapYearMonth(Map):
 
             if header.fields.get("message_type") == "EOF":
                 # Propago EOF a ambas RKs para completar el “tipo”
+
                 self._forward_eof(header, "MapYearMonth", routing_keys=self.output_rk)
                 ch.basic_ack(delivery_tag=method.delivery_tag)
                 return
@@ -151,6 +164,7 @@ class MapYearMonth(Map):
                     logger.warning(f"No se pudo mapear fila {row}: {e}")
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
+            self.print_rows(mapped)
             self._send_rows(header, mapped, routing_keys=self.output_rk)
 
         except Exception as e:
