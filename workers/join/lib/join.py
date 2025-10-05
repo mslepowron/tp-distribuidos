@@ -19,7 +19,7 @@ class Join:
         self.result_mw = mw_out
         self.output_exchange = output_exchange
         self.input_bindings = input_bindings
-        
+        self.storage = Path(storage)
         self.source_file_index: Dict[str, str] = {}
         self.source_file_closed = False
         eof_count = 0
@@ -185,37 +185,12 @@ class Join:
             if batch:
                 yield batch
 
-# ----------------- SUBCLASES -----------------
-
-class MenuJoin(Join):
-    PIVOT_FILE = "menu_items"
-    FILE_IN_BATCHS = "transaction_items"
-    SOURCE = "menu_join"
-    BATCH_SZ = 1000
-
-    def print_joined_rows(self, rows):
-        logger.info(f"-----------------------------------------------------------------------------------------------------")
-        logger.info(f"Imprimo rows")
-        n=0
+    def update_index(self, rows, col1, col2):
         for row in rows:
-            n+=1
-            logger.info(f"Row_{n}: {row}")
-        logger.info(f"-----------------------------------------------------------------------------------------------------")
-
-    def define_schema(self, header):
-        try:
-            schema = header.fields["schema"] 
-            raw_fieldnames = schema.strip()[1:-1]
-            parts = raw_fieldnames.split(",")
-
-            # limpiar cada valor
-            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
-
-            fieldnames.append("item_name")
-
-            return fieldnames
-        except KeyError:
-            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+            item_id = row.get(col1)
+            item_name = row.get(col2)
+            if item_id and item_name:
+                self.source_file_index[item_id] = item_name
 
     def on_eof_message(self, source, header):
         if source.startswith(self.PIVOT_FILE):
@@ -237,9 +212,40 @@ class MenuJoin(Join):
 
         return False
 
+    def print_joined_rows(self, rows):
+        logger.info(f"-----------------------------------------------------------------------------------------------------")
+        logger.info(f"Imprimo rows")
+        n=0
+        for row in rows:
+            n+=1
+            logger.info(f"Row_{n}: {row}")
+        logger.info(f"-----------------------------------------------------------------------------------------------------")
+# ----------------- SUBCLASES -----------------
+
+class MenuJoin(Join):
+    PIVOT_FILE = "menu_items"
+    FILE_IN_BATCHS = "transaction_items"
+    SOURCE = "menu_join"
+    BATCH_SZ = 1000
+
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("item_name")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
     def on_data_message(self, source, header, rows):
         if source.startswith(self.PIVOT_FILE):
-                self.update_index(rows)
+                self.update_index(rows, "item_id", "item_name")
 
         elif source.startswith(self.FILE_IN_BATCHS):
             if not self.source_file_closed:
@@ -282,13 +288,6 @@ class MenuJoin(Join):
             if ch is not None and hasattr(method, "delivery_tag"):
                 ch.basic_ack(delivery_tag=method.delivery_tag)
 
-    def update_index(self, rows, col1=None, col2=None):
-        for row in rows:
-            item_id = row.get("item_id")
-            item_name = row.get("item_name")
-            if item_id and item_name:
-                self.source_file_index[item_id] = item_name
-
     def _join_batch(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """ Hace el join sobre un batch de transacciones usando el menu indexado """
         if not self.source_file_index:
@@ -313,9 +312,125 @@ class MenuJoin(Join):
 
 
 class StoreJoin(Join):
+    PIVOT_FILE = "stores"
+    FILE_IN_BATCHS = "transactions"
+    SOURCE = "store_join"
+    BATCH_SZ = 1000
 
+    def define_schema(self, header):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.append("store_id")
+            fieldnames.append("store_name")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+    def on_eof_message(self, source, header):
+        if source.startswith(self.PIVOT_FILE):
+            self.source_file_closed = True
+            storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+
+            for batch in self._read_batches(storage_path, self.BATCH_SZ):
+                # Joineo los batches que llegaron antes del EOF del archivo a almacenar
+                joined_filter, joined_reduce = self._join_batch(batch)
+                self.print_joined_rows(joined_filter)
+                self.print_joined_rows(joined_reduce)
+                self._send_rows(header, self.SOURCE, joined_filter, self.output_rk[0])
+                self._send_rows(header, self.SOURCE, joined_reduce, self.output_rk[1])
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
+            if self.source_file_closed:
+                self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
+
+            return True
+
+        return False
+
+    def on_data_message(self, source, header, rows):
+        if source.startswith(self.PIVOT_FILE):
+                self.update_index(rows, "store_id", "store_name")
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            if not self.source_file_closed:
+                storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+                self._append_rows(storage_path, rows)
+            else:
+                joined_filter, joined_reduce = self._join_batch(rows)
+                self.print_joined_rows(joined_filter)
+                self.print_joined_rows(joined_reduce)
+                self._send_rows(header, self.SOURCE, joined_filter, self.output_rk[0])
+                self._send_rows(header, self.SOURCE, joined_reduce, self.output_rk[1])
+
+            return True
+        return False
+    
     def callback(self, ch, method, properties, body):
-        logger.info(f"No IMPLEMENTADO")
+        try:
+            header, rows = deserialize_message(body)
+            
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+
+            # EOF
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                res = self.on_eof_message(source, header)
+
+                if res:
+                    if ch is not None and hasattr(method, "delivery_tag"):
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                    return
+
+            res = self.on_data_message(source, header, rows)
+            if res:
+                if ch is not None and hasattr(method, "delivery_tag"):
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except Exception as e:
+            logger.error(f"{self.SOURCE} error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def _join_batch(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menu indexado """
+        if not self.source_file_index:
+            return []
+
+        out_filter = []
+        out_reduce = []
+        for row in rows:
+            store_id = row.get("store_id")
+           
+            if not store_id:
+                continue
+
+            out_filter.append({
+                    "transaction_id": row.get("transaction_id"),
+                    "created_at": row.get("created_at", ""),
+                    "store_id": store_id,
+                    "final_amount": row.get("final_amount"),
+                    "store_name": self.source_file_index.get(store_id, ""),
+                })
+
+            out_reduce.append({
+                "transaction_id": row.get("transaction_id"),
+                "store_id": store_id,
+                "store_name": self.source_file_index.get(store_id, ""),
+                "user_id": row.get("user_id"),
+            })
+
+        return out_filter, out_reduce
 
 class UserJoin(Join):
 
