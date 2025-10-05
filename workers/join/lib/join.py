@@ -51,7 +51,7 @@ class Join:
     def start_join(self):
         self.mw.start_consuming(self.callback)
 
-    def define_schema(self, header):
+    def define_schema(self, header, rk=None):
         try:
             schema = header.fields["schema"]
             raw_fieldnames = schema.strip()[1:-1]
@@ -70,19 +70,9 @@ class Join:
             return
 
         try:
-            schema = self.define_schema(header)
+            schema = self.define_schema(header, routing_keys)
 
-            if not schema or any(s == "" for s in schema):
-                first_row = rows[0]
-                schema = list(first_row.keys())
-
-            normalized_rows = []
-            for row in rows:
-                norm_row = {}
-                for field in schema:
-                    value = row.get(field, "")
-                    norm_row[field] = str(value)
-                normalized_rows.append(norm_row)
+            logger.info(f"schema {schema}")
 
             out_header = Header({
                 "message_type": "DATA",
@@ -94,15 +84,16 @@ class Join:
                 "source": source,
             })
 
-            payload = serialize_message(out_header, normalized_rows, schema)
-
+            payload = serialize_message(out_header, rows, schema)
+            
             if not routing_keys:
+                logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={routing_keys}")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in routing_keys:
+                    logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
 
-            logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={routing_keys}")
         except Exception as e:
             logger.error(f"Error sending results: {e}")
     
@@ -115,7 +106,7 @@ class Join:
                 "part": header.fields["part"],
                 "seq": header.fields["seq"],
                 "schema":  header.fields["schema"],
-                "source": header.fields["source"],
+                "source": stage,
             })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
 
@@ -220,6 +211,7 @@ class Join:
             n+=1
             logger.info(f"Row_{n}: {row}")
         logger.info(f"-----------------------------------------------------------------------------------------------------")
+
 # ----------------- SUBCLASES -----------------
 
 class MenuJoin(Join):
@@ -228,7 +220,7 @@ class MenuJoin(Join):
     SOURCE = "menu_join"
     BATCH_SZ = 1000
 
-    def define_schema(self, header):
+    def define_schema(self, header, rk=None):
         try:
             schema = header.fields["schema"] 
             raw_fieldnames = schema.strip()[1:-1]
@@ -317,21 +309,16 @@ class StoreJoin(Join):
     SOURCE = "store_join"
     BATCH_SZ = 1000
 
-    def define_schema(self, header):
+    def define_schema(self, header, rk=None):
         try:
-            schema = header.fields["schema"] 
-            raw_fieldnames = schema.strip()[1:-1]
-            parts = raw_fieldnames.split(",")
-
-            # limpiar cada valor
-            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
-
-            fieldnames.append("store_id")
-            fieldnames.append("store_name")
+            if rk[0] == "stores_joined": 
+                fieldnames = ['transaction_id', 'created_at', 'store_id', 'final_amount', 'store_name']
+            else:
+                fieldnames = ['transaction_id', 'store_id', 'store_name', 'user_id']
 
             return fieldnames
         except KeyError:
-            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+            raise KeyError(f"Schema no encontrado en SCHEMAS")
 
     def on_eof_message(self, source, header):
         if source.startswith(self.PIVOT_FILE):
@@ -343,8 +330,8 @@ class StoreJoin(Join):
                 joined_filter, joined_reduce = self._join_batch(batch)
                 self.print_joined_rows(joined_filter)
                 self.print_joined_rows(joined_reduce)
-                self._send_rows(header, self.SOURCE, joined_filter, self.output_rk[0])
-                self._send_rows(header, self.SOURCE, joined_reduce, self.output_rk[1])
+                self._send_rows(header, self.SOURCE, joined_filter, [self.output_rk[0]])
+                self._send_rows(header, self.SOURCE, joined_reduce, [self.output_rk[1]])
 
         elif source.startswith(self.FILE_IN_BATCHS):
             # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
@@ -367,8 +354,8 @@ class StoreJoin(Join):
                 joined_filter, joined_reduce = self._join_batch(rows)
                 self.print_joined_rows(joined_filter)
                 self.print_joined_rows(joined_reduce)
-                self._send_rows(header, self.SOURCE, joined_filter, self.output_rk[0])
-                self._send_rows(header, self.SOURCE, joined_reduce, self.output_rk[1])
+                self._send_rows(header, self.SOURCE, joined_filter, [self.output_rk[0]])
+                self._send_rows(header, self.SOURCE, joined_reduce, [self.output_rk[1]])
 
             return True
         return False

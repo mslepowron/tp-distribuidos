@@ -203,11 +203,95 @@ class ProfitReducer(Reduce):
 
 class UserPurchasesReducer(Reduce):
     def callback(self, ch, method, properties, body):
-        logger.info(f"NO IMPLEMENTADA")
+        header, rows = deserialize_message(body)
+
+        # Caso EOF
+        if header.fields.get("message_type") == "EOF":
+            # Emitir todo lo que se acumuló en memoria
+            self._aggregate_and_emit(header)
+            self._forward_eof(header, "ReduceUsrPurchases", self.output_rk, self.output_rk[0])
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        # Acumular las filas
+        for row in rows:
+            ym = row.get("year_month_created_at")
+            item = row.get("store_name")
+            logger.info(f"ROW: {row}")
+            if ym and item:
+                logger.info("AGREGO ELEMENTO")
+                self.accumulator[(ym, item)] += 1
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+    def _aggregate_and_emit(self, header):
+        """Convierte el diccionario en filas y las envía todas."""
+        result_rows = []
+        for (ym, item), user_purchases in self.accumulator.items():
+            result_rows.append({
+                "store_name": ym,
+                "user_id": item,
+                "user_purchases": user_purchases
+            })
+
+        if result_rows:
+            logger.info("HAY DATA PARA ENVIAR")
+            logger.info(f"{result_rows}")
+            header.fields["schema"] = "['store_name','user_id','user_purchases']"
+            header.fields["stage"] = "ReduceUsrPurchases"
+            self._send_rows(header, "user_purchases", result_rows, self.output_rk, self.output_rk[0])
+        else:
+            logger.info("NO HAY DATA PARA ENVIAR")
+
+        self.accumulator.clear()
     
     
 class TpvReducer(Reduce):
+
     def callback(self, ch, method, properties, body):
-        logger.info(f"NO IMPLEMENTADA")
+        header, rows = deserialize_message(body)
+
+        # Caso EOF
+        if header.fields.get("message_type") == "EOF":
+            # Emitir todo lo que se acumuló en memoria
+            self._aggregate_and_emit(header)
+            self._forward_eof(header, "ReduceTPV", self.output_rk, self.output_rk[0])
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        # Acumular las filas
+        for row in rows:
+            ym = row.get("year_half_created_at")
+            item = row.get("store_name")
+            final_amount = float(row.get("final_amount") or 0.0)
+            logger.info(f"ROW: {row}")
+            if ym and item:
+                logger.info("AGREGO ELEMENTO")
+                self.accumulator[(ym, item)] += final_amount
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+    def _aggregate_and_emit(self, header):
+        """Convierte el diccionario en filas y las envía todas."""
+        result_rows = []
+        for (ym, item), tpv in self.accumulator.items():
+            result_rows.append({
+                "year_half_created_at": ym,
+                "item_name": item,
+                "tpv": tpv
+            })
+
+        if result_rows:
+            logger.info("HAY DATA PARA ENVIAR")
+            logger.info(f"{result_rows}")
+            header.fields["schema"] = "['year_half_created_at','item_name','tpv']"
+            header.fields["stage"] = "ReduceTPV"
+            self._send_rows(header, "tpv_reduce", result_rows, self.output_rk, self.output_rk[0])
+        else:
+            logger.info("NO HAY DATA PARA ENVIAR")
+
+        self.accumulator.clear()
     
     
