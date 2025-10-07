@@ -2,7 +2,12 @@ import logging
 from uuid import uuid4
 import sys
 import os
+import io
 import time
+import ast
+import socket
+import csv
+from pathlib import Path
 from typing import Dict, List
 import pika
 from middleware.rabbitmq.mom import MessageMiddlewareExchange
@@ -15,6 +20,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app_controller")
 
 BATCH_SIZE = 50000
+REPORTS_DIR = Path(os.getenv("STORAGE_DIR", "/storage"))
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 SCHEMA_BY_RK = {
     "transactions": "transactions.clean",
@@ -44,9 +51,18 @@ class AppController:
         self.result_routing_keys = result_routing_keys
         self.result_sink_queue = result_sink_queue
 
+        self.gateway_host = os.getenv("GATEWAY_HOST", "gateway")
+        self.gateway_port = int(os.getenv("GATEWAY_PORT", "9200"))
+        self._report_streams = {}
+        self._client_ids_by_source = {}
+
         self.mw_input = None
         self.mw_results = None
         self._running = False
+    
+    def register_client_for_source(self, source: str, client_id: str):
+        self._client_ids_by_source[source] = client_id
+        logger.info(f"[REGISTER] source={source} → client_id={client_id}")
 
     def connect_to_middleware(self):
         try:
@@ -79,7 +95,7 @@ class AppController:
                     self.result_mw.close()
                     logger.info("Middleware connection closed.")
                 except Exception as e:
-                    logger.warning(f"Error closing middleware: {e}")
+                    logger.info(f"Error closing middleware: {e}")
 
     # def _wait_for_queues(self, queue_names, timeout=30):
     #     """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
@@ -97,7 +113,7 @@ class AppController:
     #             time.sleep(1)
     #         except Exception:
     #             time.sleep(1)
-    #     logger.warning(f"Timeout esperando colas {queue_names}; enviando igual")
+    #     logger.info(f"Timeout esperando colas {queue_names}; enviando igual")
     #     return False
     
     def run(self):
@@ -109,11 +125,17 @@ class AppController:
         def callback_results(ch, method, properties, body):
             try:
                 rk = method.routing_key  
-                logger.info(f"[results:{rk}] len={len(body)} bytes")
                 header, rows = deserialize_message(body)
-                logger.info(f"Header: {header.as_dictionary()}")
-                for row in rows:
-                    logger.info(f"Resultado recibido: {row}")
+                header_dict = header.as_dictionary()
+                query_id = header_dict["query_id"]
+                msg_type = header_dict["message_type"]
+
+                if msg_type == "DATA":
+                    self._stream_result_rows(query_id, header_dict, rows)
+                elif msg_type == "EOF":
+                    logger.info(f"[EOF RESULT] Finalizó query_id={query_id}. Reporte listo.")
+                    self._close_report_stream(query_id)
+          
             except Exception as e:
                 logger.error(f"Error deserializando resultado: {e}")
             finally:
@@ -168,3 +190,62 @@ class AppController:
             logger.info(f"[EOF] {self.input_exchange}:{routing_key}")
         except Exception as e:
             logger.error(f"Error enviando END_OF_FILE para routing_key={routing_key}: {e}")
+
+    def _stream_result_rows(self, query_id: str, header_dict: dict, rows: List[Dict]):
+        if not rows:
+            return
+
+        schema_str = header_dict["schema"]
+        try:
+            schema = ast.literal_eval(schema_str)
+        except Exception:
+            logger.info(f"Schema inválido en header: {schema_str}")
+            schema = list(rows[0].keys())
+
+        sock, text_io, writer = self._get_or_create_report_stream(query_id, schema, header_dict)
+        for row in rows:
+            writer.writerow(row)
+        text_io.flush()
+        logger.info(f"[REPORT STREAM] Enviadas {len(rows)} filas para query_id={query_id}")
+
+    # Devuelve la tupla (socket, csv_writer) para un determinado query_id
+    def _get_or_create_report_stream(self, query_id: str, schema: List[str], header_dict: dict):
+        if query_id in self._report_streams:
+            return self._report_streams[query_id]
+
+        try:
+            source = header_dict.get("source")
+            client_id = self._client_ids_by_source.get(source)
+            if not client_id:
+                raise RuntimeError(f"No se registró client_id para source={source}")
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((self.gateway_host, self.gateway_port))
+            # MAndamos primero el query_id para que el Gateway sepa de qué reporte es
+            sock.sendall(f"{client_id}\n===\n{query_id}\n===\n".encode("utf-8"))
+
+            raw = sock.makefile('wb', buffering=0)  # raw binario sin buffer
+            text_io = io.TextIOWrapper(raw, encoding='utf-8', newline='', write_through=True)
+            writer = csv.DictWriter(text_io, fieldnames=schema)
+            writer.writeheader()
+            text_io.flush()
+
+            self._report_streams[query_id] = (sock, text_io, writer)
+            logger.info(f"[REPORT STREAM] Iniciada transmisión para query_id={query_id}")
+            return self._report_streams[query_id]
+
+        except Exception as e:
+            logger.error(f"Error creando stream de reporte para {query_id}: {e}")
+            raise
+
+    def _close_report_stream(self, query_id: str):
+        stream = self._report_streams.pop(query_id, None)
+        if stream:
+            sock, text_io, writer = stream
+            try:
+                text_io.flush()
+                sock.shutdown(socket.SHUT_WR)
+                sock.close()
+                logger.info(f"[REPORT STREAM] Cerrado para query_id={query_id}")
+            except Exception as e:
+                logger.error(f"Error cerrando stream de reporte {query_id}: {e}")

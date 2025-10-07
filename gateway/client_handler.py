@@ -54,11 +54,18 @@ class ClientHandler(threading.Thread):
             with socket.create_connection((self.app_controller_host, self.app_controller_port)) as controller_sock:
                 logger.info(f"Connected to AppController at {self.app_controller_host}:{self.app_controller_port}")
 
+                first = True
                 while not self._stop_flag.is_set():
                     data = self._client_socket.recv(8192)
                     if not data:
                         logger.info(f"Client {self._client_id} closed connection.")
                         break
+
+                    if first:
+                        # Prefix client_id + separador al primer mensaje
+                        prefix = f"{self._client_id}\n===\n".encode("utf-8")
+                        data = prefix + data
+                        first = False
 
                     logger.info(f"Received {len(data)} bytes from client {self._client_id}")
                     controller_sock.sendall(data)  
@@ -68,3 +75,11 @@ class ClientHandler(threading.Thread):
             logger.error(f"Error in ClientHandler {self._client_id}: {e}")
         finally:
             self._stop_client()
+
+        def send_raw(self, data: bytes):
+            if self._client_is_connected():
+                try:
+                    self._client_socket.sendall(data)
+                except Exception as e:
+                    logger.error(f"Error sending raw data to client {self._client_id}: {e}")
+                    self._stop_client()

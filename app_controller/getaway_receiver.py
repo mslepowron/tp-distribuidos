@@ -24,20 +24,28 @@ def start_tcp_listener(port, controller):
             logger.info(f"Conexión entrante desde {addr}")
             threading.Thread(target=handle_connection, args=(conn, addr, controller), daemon=True).start()
 
-def handle_connection(conn, addr, controller):
+def handle_connection(conn, addr, controller, client_id=None):
     try:
         with conn:
             data = b""
+
             while True:
                 chunk = conn.recv(BUFFER_SIZE)
                 if not chunk:
                     break
                 data += chunk
-                data = _process_buffered_data(data, addr, controller)
+
+                if client_id is None and SEPARATOR in data:
+                    parts = data.split(SEPARATOR, 1)
+                    client_id = parts[0].decode().strip()
+                    data = parts[1]
+                    logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
+
+                data = _process_buffered_data(data, addr, controller, client_id)
     except Exception as e:
         logger.error(f"Error en conexión con {addr}: {e}")
 
-def _process_buffered_data(buffer: bytes, addr, controller):
+def _process_buffered_data(buffer: bytes, addr, controller, client_id=None):
     while True:
         sep_index = buffer.find(SEPARATOR)
         if sep_index == -1:
@@ -58,18 +66,21 @@ def _process_buffered_data(buffer: bytes, addr, controller):
 
         try:
             header, rows = deserialize_message(full_msg)
-            _handle_deserialized_message(header, rows, addr, controller)
+            _handle_deserialized_message(header, rows, addr, controller, client_id)
         except Exception as e:
             logger.error(f"Error deserializando o procesando mensaje: {e}")
             break
 
     return buffer
 
-def _handle_deserialized_message(header, rows, addr, controller):
+def _handle_deserialized_message(header, rows, addr, controller, client_id=None):
     logger.info(f"[GATEWAY] Mensaje recibido de {addr}")
     msg_type = header.fields["message_type"]
     source = header.fields["source"]
 
+    if client_id:
+        controller.register_client_for_source(source, client_id)
+    
     try:
         routing_key = get_routing_key_from_filename(source)
         clean_columns, raw_columns = get_schema_columns_by_source(source)

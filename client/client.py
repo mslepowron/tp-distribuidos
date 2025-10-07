@@ -2,6 +2,9 @@ import socket
 import signal
 import time
 import logging
+import csv
+from pathlib import Path
+import io
 import os
 from pathlib import Path
 from communication.protocol.deserialize import deserialize_message  
@@ -11,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 MAX_RETRIES = 5
 DELAY_BETWEEN_RETRIES = 50
+SEPARATOR = b"\n===\n"
 
 FILE_BASENAMES = [
     "transactions",
@@ -53,7 +57,7 @@ class Client:
                 sender.send_dataset(file_path)
 
         logger.info("All datasets sent successfully.")
-        self._wait_for_report()
+        self._wait_for_reports()
 
     def _connect(self, retries=MAX_RETRIES, delay=DELAY_BETWEEN_RETRIES):
         attempt = 0
@@ -100,29 +104,59 @@ class Client:
         logger.info("Signal received, stopping client...")
         self._stop_client()
     
-    def _wait_for_report(self):
-        logger.info("Waiting for report from Gateway...")
+    def _wait_for_reports(self):
+        logger.info("Waiting for reports from Gateway...")
         try:
             buffer = b""
-            while b"\n===\n" not in buffer:
-                chunk = self.socket.recv(1024)
-                if not chunk:
-                    logger.warning("Connection closed before report was received.")
-                    break
-                buffer += chunk
 
-            result = deserialize_message(buffer)
-            if len(result) == 3:
-                header, rows, schema = result
-            else:
-                header, rows = result
+            while True: 
+                while buffer.count(SEPARATOR) < 2:
+                    chunk = self.socket.recv(1024)
+                    if not chunk:
+                        logger.info("Connection closed by Gateway (no more reports).")
+                        return
+                    buffer += chunk
 
-            logger.info(f"Report received from Gateway.")
+                parts = buffer.split(SEPARATOR, 2)
+                if len(parts) < 3:
+                    logger.error(f"Invalid report header: {buffer[:200]!r}")
+                    return
+
+                recv_client_id = parts[0].decode().strip()
+                query_id = parts[1].decode().strip()
+                csv_remainder = parts[2]
+                buffer = b""  
+
+                logger.info(f"Report header received. client_id={recv_client_id}, query_id={query_id}")
+
+                base_report_dir = Path(os.getenv("OUTPUT_DIR", "/report")) / f"client_{recv_client_id}"
+                base_report_dir.mkdir(parents=True, exist_ok=True)
+
+                output_path = base_report_dir / f"{query_id}.csv"
+                logger.info(f"Saving report to {output_path}")
+
+                with output_path.open("wb") as f:
+                    f.write(csv_remainder)
+
+                    # ahora leer hasta que venga otro header o se corte
+                    while True:
+                        chunk = self.socket.recv(8192)
+                        if not chunk:
+                            logger.info(f"Stream finished for query_id={query_id}")
+                            return  # conexión cerrada
+                        # nuevo header -> lo dejamos en buffer para próxima vuelta
+                        if chunk.startswith(b"\n") or chunk.count(SEPARATOR) >= 2:
+                            buffer += chunk
+                            break
+                        f.write(chunk)
+
+                logger.info(f"Report saved for query_id={query_id} at {output_path}")
 
         except Exception as e:
-            logger.error(f"Error while waiting for report: {e}")
+            logger.error(f"Error while waiting for reports: {e}")
         finally:
             self._stop_client()
+
 
     def _stop_client(self):
         try:
