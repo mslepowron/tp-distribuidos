@@ -42,6 +42,7 @@ def main():
     threading.Thread(
         target=start_tcp_listener, args=(PORT, controller), daemon=True
     ).start()
+    print(f"[AppController] Gateway TCP receiver escuchando en puerto {PORT}")
 
     controller.run()
 

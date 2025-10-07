@@ -294,23 +294,6 @@ services:
       - ./client/report/client_1:/report
     networks:
       - coffee_analysis_net
-  client_2:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    depends_on:
-      - gateway
-    environment:
-      - GATEWAY_HOST=gateway
-      - GATEWAY_PORT=9000
-      - BATCH_SIZE=50000
-      - RAW_DATA_DIR=/data
-      - OUTPUT_DIR=/report
-    volumes:
-      - ./client/data:/data
-      - ./client/report/client_1:/report
-    networks:
-      - coffee_analysis_net
 networks:
   coffee_analysis_net:
     ipam:

@@ -1,6 +1,5 @@
 import logging
 from uuid import uuid4
-import csv
 import sys
 import os
 import time
@@ -11,8 +10,6 @@ from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
 from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
-from initializer import clean_all_files_grouped
-from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app_controller")
@@ -107,22 +104,10 @@ class AppController:
         self.connect_to_middleware()
         self._running = True
 
-        # self._wait_for_queues(["filter_year_q", "join_store_q"])
-        #self._wait_for_queues(["filter_year_q", "join_menu_q"])
-        try:
-            files_grouped = clean_all_files_grouped()
-            for routing_key, filename, row_iterator in files_grouped:
-                queries = QUERY_IDS_BY_FILE.get(routing_key, [])
-                logger.info(f"Procesando archivo '{filename}' con routing_key='{routing_key}' para queries: {queries}")
-                self._send_batches_from_iterator(row_iterator, routing_key)
-                self.send_end_of_file(routing_key=routing_key)
-
-        except Exception as e:
-            logger.error(f"Error processing files: {e}")
+        logger.info("AppController listo para recibir mensajes desde el Gateway")
 
         def callback_results(ch, method, properties, body):
             try:
-                # Deserializar con tu nuevo protocolo
                 rk = method.routing_key  
                 logger.info(f"[results:{rk}] len={len(body)} bytes")
                 header, rows = deserialize_message(body)
@@ -141,20 +126,6 @@ class AppController:
             logger.error(f"Error consumiendo resultados: {e}")
         finally:
             self.shutdown()
-
-    def _send_batches_from_iterator(self, row_iterator, routing_key: str):
-        source = SCHEMA_BY_RK[routing_key]
-        schema = CLEAN_SCHEMAS[source]  
-        batch = []
-        for row in row_iterator:
-            if not self._running:
-                break
-            batch.append(row)
-            if len(batch) >= BATCH_SIZE:
-                self.send_batch(batch, routing_key, source, schema)
-                batch = []
-        if batch and self._running:
-            self.send_batch(batch, routing_key, source, schema)
     
     def send_batch(self, batch, routing_key: str, source: str, schema: List[str]):
         if not self._running or not batch:
@@ -166,7 +137,7 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", source),
                 ("seq", str(uuid4())),
-                ("schema", schema),
+                ("schema", str(schema)),
                 ("source", source)
             ]
             header = Header(header_fields)
@@ -188,7 +159,7 @@ class AppController:
                 ("stage", "INIT"),
                 ("part", source),
                 ("seq", str(uuid4())),
-                ("schema", schema),
+                ("schema", str(schema)),
                 ("source", source)
             ]
             header = Header(header_fields)

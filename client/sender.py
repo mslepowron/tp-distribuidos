@@ -50,6 +50,7 @@ class Sender:
         schema = RAW_SCHEMAS[matched_schema_key]
 
         with filepath.open("r", encoding="utf-8") as f:
+            _ = f.readline()  
             rows = []
             for line in f:
                 fields = line.strip().split(",")
@@ -58,7 +59,6 @@ class Sender:
                 row = dict(zip(schema, fields))
                 rows.append(row)
 
-                # Enviar cuando se acumulan 50.000 filas
                 if len(rows) >= MAX_ROWS:
                     self._send_rows_as_message(rows, schema, filename)
                     rows = []
@@ -82,7 +82,7 @@ class Sender:
 
         message = serialize_message(header, rows, schema)
         if len(message) > MAX_PAYLOAD_SIZE:
-            logger.warning(f"Message size {len(message)} exceeds max payload, splitting not implemented.")
+            logger.info(f"Message size {len(message)} exceeds max payload.")
         self._send_all(message)
 
     def _send_all(self, data: bytes):

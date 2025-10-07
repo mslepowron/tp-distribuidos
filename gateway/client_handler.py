@@ -33,7 +33,7 @@ class ClientHandler(threading.Thread):
         try:
             self._client_socket.close()
         except Exception as e:
-            logger.warning(f"Error closing client socket: {e}")
+            logger.info(f"Error closing client socket: {e}")
 
     def run(self):
         logger.info(f"ClientHandler thread started for {self._client_id}")
@@ -50,14 +50,19 @@ class ClientHandler(threading.Thread):
             ack_message = serialize_message(ack_header, [], [])
             self._client_socket.sendall(ack_message)
             logger.info(f"Sent ACK with client ID {self._client_id} to {self._client_addr}")
+            
+            with socket.create_connection((self.app_controller_host, self.app_controller_port)) as controller_sock:
+                logger.info(f"Connected to AppController at {self.app_controller_host}:{self.app_controller_port}")
 
-            while not self._stop_flag.is_set():
-                data = self._client_socket.recv(8192)
-                if not data:
-                    logger.info(f"Client {self._client_id} closed connection.")
-                    break
+                while not self._stop_flag.is_set():
+                    data = self._client_socket.recv(8192)
+                    if not data:
+                        logger.info(f"Client {self._client_id} closed connection.")
+                        break
 
-                logger.info(f"Received {len(data)} bytes from client {self._client_id}")
+                    logger.info(f"Received {len(data)} bytes from client {self._client_id}")
+                    controller_sock.sendall(data)  
+                    logger.info(f"Forwarded {len(data)} bytes to AppController")
 
         except Exception as e:
             logger.error(f"Error in ClientHandler {self._client_id}: {e}")
