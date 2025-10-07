@@ -19,6 +19,25 @@ PREFIX_MAPPING = {
 def clean_all_files_grouped() -> Iterator[Tuple[str, str, Iterator[dict]]]:
     for csv_path in INPUT_DIR.glob("*.csv"):
         filename = csv_path.name.lower().strip()
+
+        if filename.startswith("users"): #me salteo enviar el users junto con los otros
+            continue
+        
+        for prefix, (clean_key, raw_key) in PREFIX_MAPPING.items():
+            if filename.startswith(prefix):
+                clean_columns = CLEAN_SCHEMAS[clean_key]
+                raw_columns = RAW_SCHEMAS[raw_key]
+                yield prefix, filename, _clean_csv_file(csv_path, clean_columns, raw_columns)
+                break
+
+def clean_users_files() -> Iterator[Tuple[str, str, Iterator[dict]]]:
+    for csv_path in INPUT_DIR.glob("*.csv"):
+        filename = csv_path.name.lower().strip()
+
+        # si no es un archivo de tipo user no lo proceso
+        if not filename.startswith("users"): 
+            continue
+        
         for prefix, (clean_key, raw_key) in PREFIX_MAPPING.items():
             if filename.startswith(prefix):
                 clean_columns = CLEAN_SCHEMAS[clean_key]

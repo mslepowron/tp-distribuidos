@@ -14,7 +14,7 @@ class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
     OUTPUT_FILE_BASENAME: str = None  #archivo donde se guarda el resultado del join
 
-    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
+    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage, trigger_mw=None, trigger_ex=None):
         self.mw = mw_in
         self.result_mw = mw_out
         self.output_exchange = output_exchange
@@ -28,6 +28,9 @@ class Join:
             self.output_rk = [output_rks] if output_rks else []
         else:
             self.output_rk = output_rks or []
+        
+        self.trigger_mw = trigger_mw
+        self.trigger_ex = trigger_ex
 
     def start(self):
         try:
@@ -455,6 +458,34 @@ class UserJoin(Join):
                 self._send_rows(header, self.SOURCE, joined, self.output_rk)
 
             return True
+        return False
+    
+    def on_eof_message(self, source, header):
+        if source.startswith(self.PIVOT_FILE):
+            self.source_file_closed = True
+            storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+            
+            out_header = Header({
+                "message_type": "FILE",
+                "query_id": header.fields.get("query_id"),
+                "stage": "JOIN",
+                "part": header.fields.get("part"),
+                "seq": header.fields.get("seq"),
+                "schema": [],
+                "source": source,
+            })
+
+            payload = serialize_message(out_header, [], [])
+            # PIDO EL OTRO ARCHIVO
+            self.trigger_mw.send_to(self.trigger_ex, "users_file", payload)
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
+            if self.source_file_closed:
+                self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
+
+            return True
+
         return False
     
     def callback(self, ch, method, properties, body):

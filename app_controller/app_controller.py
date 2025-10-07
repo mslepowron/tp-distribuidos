@@ -11,7 +11,7 @@ from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
 from communication.protocol.schemas import CLEAN_SCHEMAS
 from communication.protocol.deserialize import deserialize_message
-from initializer import clean_all_files_grouped
+from initializer import clean_all_files_grouped, clean_users_files
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -71,6 +71,13 @@ class AppController:
                 queue_name=self.result_sink_queue,
                 bindings=[(self.result_exchange, "direct", rk) for rk in self.result_routing_keys]
             ) 
+            
+            self.trigger_mw = MessageMiddlewareExchange(
+                host=self.host,
+                queue_name="trigger_q",
+                bindings=[("trigger", "direct", "users_file")]
+            ) 
+
         except Exception as e:
             logger.error(f"No se pudo conectar a RabbitMQ: {e}")
             sys.exit(1)
@@ -79,11 +86,12 @@ class AppController:
         """Closing middleware connection for graceful shutdown"""
         logger.info("Shutting down AppController gracefully...")
         self._running = False
-        for conn in [self.mw_input, self.result_mw]:
+        for conn in [self.mw_input, self.result_mw, self.trigger_mw]:
             if conn:
                 try:
                     self.mw_input.close()
                     self.result_mw.close()
+                    self.trigger_mw.close()
                     logger.info("Middleware connection closed.")
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
@@ -137,6 +145,33 @@ class AppController:
                 logger.error(f"Error deserializando resultado: {e}")
             finally:
                 ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        def callback_trigger(ch, method, properties, body):
+            try:
+                logger.info(f"Recibi el trigger para enviar el archivo users")
+                # Deserializar con tu nuevo protocolo
+                rk = method.routing_key  
+                # logger.info(f"[results:{rk}] len={len(body)} bytes")
+                header, _ = deserialize_message(body)
+                if header.fields.get("message_type") == "FILE":
+                    try:
+                        files_grouped = clean_users_files()
+                        for routing_key, filename, row_iterator in files_grouped:
+                            queries = QUERY_IDS_BY_FILE.get(routing_key, [])
+                            logger.info(f"Procesando archivo '{filename}' con routing_key='{routing_key}' para queries: {queries}")
+                            self._send_batches_from_iterator(row_iterator, routing_key)
+                            self.send_end_of_file(routing_key=routing_key)
+
+                    except Exception as e:
+                        logger.error(f"Error processing files: {e}")
+            except Exception as e:
+                logger.error(f"Error deserializando resultado: {e}")
+            finally:
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+        logger.info(f"Esperando para enviar el users '{self.result_sink_queue}'...")
+        self.trigger_mw.start_consuming(callback_trigger)
 
         logger.info(f"Esperando resultados en queue '{self.result_sink_queue}'...")
         try:
@@ -201,3 +236,5 @@ class AppController:
             logger.info(f"[EOF] {self.input_exchange}:{routing_key}")
         except Exception as e:
             logger.error(f"Error enviando END_OF_FILE para routing_key={routing_key}: {e}")
+
+    
