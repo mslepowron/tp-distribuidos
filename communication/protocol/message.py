@@ -31,7 +31,7 @@ HEADER_KEYS = (
     "source" # de que archivo viene el mensaje
 )
 
-MESSAGE_TYPES = {"DATA", "EOF"}
+MESSAGE_TYPES = {"DATA", "EOF", "ACK"}
 
 @dataclass
 class Header:
@@ -62,12 +62,27 @@ class Header:
         except Exception as e:
             raise ProtocolError(f"Error al codificar el header: {e}")
 
+    #@staticmethod
+    #def decode(header_bytes: bytes) -> 'Header':
+    #    try:
+    #        input_stream = io.StringIO(header_bytes.decode("utf-8"))
+    #        reader = csv.reader(input_stream)
+    #        fields = [(key, value) for key, value in reader]
+    #        return Header(fields)
+    #    except Exception as e:
+    #        raise ProtocolError(f"Error al decodificar el header: {e}")
+
     @staticmethod
     def decode(header_bytes: bytes) -> 'Header':
         try:
             input_stream = io.StringIO(header_bytes.decode("utf-8"))
             reader = csv.reader(input_stream)
-            fields = [(key, value) for key, value in reader]
+            fields = []
+            for row in reader:
+                if len(row) != 2:
+                    raise HeaderError(f"Fila inválida en header: {row}")
+                fields.append((row[0], row[1]))
             return Header(fields)
         except Exception as e:
             raise ProtocolError(f"Error al decodificar el header: {e}")
+

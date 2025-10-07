@@ -1,7 +1,10 @@
 import signal
 import os
+import threading
+import socket
 import configparser
 from app_controller import AppController
+from getaway_receiver import start_tcp_listener
 
 def graceful_shutdown(signum, frame):
     """Handler para SIGTERM o SIGINT que llama al shutdown del controller."""
@@ -34,6 +37,11 @@ def main():
 
     signal.signal(signal.SIGTERM, graceful_shutdown)
     signal.signal(signal.SIGINT, graceful_shutdown)
+
+    PORT = int(os.getenv("APP_CONTROLLER_PORT", "9100"))
+    threading.Thread(
+        target=start_tcp_listener, args=(PORT, controller), daemon=True
+    ).start()
 
     controller.run()
 
