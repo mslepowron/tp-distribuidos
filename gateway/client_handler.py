@@ -5,7 +5,9 @@ import os
 from communication.protocol.message import Header
 from communication.protocol.serialize import serialize_message
 from communication.protocol.deserialize import deserialize_message  
+
 logger = logging.getLogger("ClientHandler")
+SEPARATOR = b"\n===\n"
 
 class ClientHandler(threading.Thread):
 
@@ -55,6 +57,7 @@ class ClientHandler(threading.Thread):
                 logger.info(f"Connected to AppController at {self.app_controller_host}:{self.app_controller_port}")
 
                 first = True
+                threading.Thread(target=self._forward_to_client, args=(controller_sock,), daemon=True).start()
                 while not self._stop_flag.is_set():
                     data = self._client_socket.recv(8192)
                     if not data:
@@ -75,11 +78,19 @@ class ClientHandler(threading.Thread):
             logger.error(f"Error in ClientHandler {self._client_id}: {e}")
         finally:
             self._stop_client()
+    
+    def _forward_to_client(self, controller_sock: socket.socket):
+        logger.info(f"Started forwarding thread for client {self._client_id}")
+        try:
+            while not self._stop_flag.is_set():
+                data = controller_sock.recv(8192)
+                if not data:
+                    logger.info(f"[REPORT] Connection to AppController closed.")
+                    break
+                self._client_socket.sendall(data)
+                logger.info(f"[REPORT] Forwarded {len(data)} bytes to client {self._client_id}")
+                logger.info(f"🔎 Raw report data:\n{data.decode('utf-8', errors='replace')}")
+        except Exception as e:
+            logger.error(f"[REPORT] Error forwarding to client: {e}")
+            self._stop_client()
 
-        def send_raw(self, data: bytes):
-            if self._client_is_connected():
-                try:
-                    self._client_socket.sendall(data)
-                except Exception as e:
-                    logger.error(f"Error sending raw data to client {self._client_id}: {e}")
-                    self._stop_client()

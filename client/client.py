@@ -103,50 +103,55 @@ class Client:
     def _signal_handler(self, signum, frame):
         logger.info("Signal received, stopping client...")
         self._stop_client()
-    
+
     def _wait_for_reports(self):
         logger.info("Waiting for reports from Gateway...")
+        
         try:
             buffer = b""
-
-            while True: 
+            logger.info(f"🔎 Raw header buffer:\n{buffer.decode('utf-8', errors='replace')}")
+            while True:
+                # Leer más datos si no tenemos al menos 2 separadores
                 while buffer.count(SEPARATOR) < 2:
                     chunk = self.socket.recv(1024)
                     if not chunk:
                         logger.info("Connection closed by Gateway (no more reports).")
                         return
                     buffer += chunk
+                
+                # Extraer header completo (client_id + query_id)
+                header_end = buffer.find(SEPARATOR)
+                part1 = buffer[:header_end]
+                rest = buffer[header_end + len(SEPARATOR):]
 
-                parts = buffer.split(SEPARATOR, 2)
-                if len(parts) < 3:
-                    logger.error(f"Invalid report header: {buffer[:200]!r}")
-                    return
+                second_sep = rest.find(SEPARATOR)
+                if second_sep == -1:
+                    logger.warning("Incomplete header. Waiting for more data...")
+                    continue
 
-                recv_client_id = parts[0].decode().strip()
-                query_id = parts[1].decode().strip()
-                csv_remainder = parts[2]
-                buffer = b""  
+                part2 = rest[:second_sep]
+                csv_remainder = rest[second_sep + len(SEPARATOR):]
+
+                recv_client_id = part1.decode().strip()
+                query_id = part2.decode().strip()
 
                 logger.info(f"Report header received. client_id={recv_client_id}, query_id={query_id}")
 
                 base_report_dir = Path(os.getenv("OUTPUT_DIR", "/report")) / f"client_{recv_client_id}"
                 base_report_dir.mkdir(parents=True, exist_ok=True)
-
                 output_path = base_report_dir / f"{query_id}.csv"
-                logger.info(f"Saving report to {output_path}")
 
                 with output_path.open("wb") as f:
                     f.write(csv_remainder)
 
-                    # ahora leer hasta que venga otro header o se corte
+                    # Continuar leyendo el resto del archivo hasta que empiece otro reporte
                     while True:
                         chunk = self.socket.recv(8192)
                         if not chunk:
                             logger.info(f"Stream finished for query_id={query_id}")
-                            return  # conexión cerrada
-                        # nuevo header -> lo dejamos en buffer para próxima vuelta
-                        if chunk.startswith(b"\n") or chunk.count(SEPARATOR) >= 2:
-                            buffer += chunk
+                            return
+                        if chunk.count(SEPARATOR) >= 2:
+                            buffer = chunk
                             break
                         f.write(chunk)
 
@@ -156,7 +161,6 @@ class Client:
             logger.error(f"Error while waiting for reports: {e}")
         finally:
             self._stop_client()
-
 
     def _stop_client(self):
         try:

@@ -6,11 +6,13 @@ from communication.protocol.deserialize import deserialize_message
 from initializer import clean_rows, get_schema_columns_by_source, get_routing_key_from_filename
 from io import StringIO
 import csv
+from app_controller import AppController
 
 logger = logging.getLogger("gateway-receiver")
 
 BUFFER_SIZE = 8192  # máx. 8 KB por mensaje
 SEPARATOR = b"\n===\n"
+client_streams = {}
 
 def start_tcp_listener(port, controller):
     logger.info(f"AppController TCP listening on port {port}...")
@@ -24,26 +26,57 @@ def start_tcp_listener(port, controller):
             logger.info(f"Conexión entrante desde {addr}")
             threading.Thread(target=handle_connection, args=(conn, addr, controller), daemon=True).start()
 
-def handle_connection(conn, addr, controller, client_id=None):
+def handle_connection(conn: socket.socket, addr, controller: AppController):
+    logger.info(f"[GATEWAY] Conexión entrante desde {addr}")
+    buffer = b""
+    while buffer.count(SEPARATOR) < 1:
+        chunk = conn.recv(BUFFER_SIZE)
+        if not chunk:
+            logger.error("[GATEWAY] No se recibió client_id inicial.")
+            return
+        buffer += chunk
+
+    parts = buffer.split(SEPARATOR, 1)
+    client_id = parts[0].decode().strip()
+    remainder = parts[1] if len(parts) > 1 else b""
+
+    logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
+    client_streams[client_id] = conn  # registrar conexión viva
+
     try:
-        with conn:
-            data = b""
-
-            while True:
-                chunk = conn.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                data += chunk
-
-                if client_id is None and SEPARATOR in data:
-                    parts = data.split(SEPARATOR, 1)
-                    client_id = parts[0].decode().strip()
-                    data = parts[1]
-                    logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
-
-                data = _process_buffered_data(data, addr, controller, client_id)
+        buffer = remainder
+        while True:
+            buffer = _process_buffered_data(buffer, addr, controller, client_id)
+            chunk = conn.recv(BUFFER_SIZE)
+            if not chunk:
+                break
+            buffer += chunk
     except Exception as e:
-        logger.error(f"Error en conexión con {addr}: {e}")
+        logger.error(f"[GATEWAY] Error en stream de {client_id}: {e}")
+    finally:
+        conn.close()
+        del client_streams[client_id]
+
+#def handle_connection(conn, addr, controller, client_id=None):
+#    try:
+#        with conn:
+#            data = b""
+#
+#            while True:
+#                chunk = conn.recv(BUFFER_SIZE)
+#                if not chunk:
+#                    break
+#                data += chunk
+#
+#                if client_id is None and SEPARATOR in data:
+#                    parts = data.split(SEPARATOR, 1)
+#                    client_id = parts[0].decode().strip()
+#                    data = parts[1]
+#                    logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
+#
+#                data = _process_buffered_data(data, addr, controller, client_id)
+#    except Exception as e:
+#        logger.error(f"Error en conexión con {addr}: {e}")
 
 def _process_buffered_data(buffer: bytes, addr, controller, client_id=None):
     while True:
@@ -78,9 +111,9 @@ def _handle_deserialized_message(header, rows, addr, controller, client_id=None)
     msg_type = header.fields["message_type"]
     source = header.fields["source"]
 
-    if client_id:
-        controller.register_client_for_source(source, client_id)
-    
+    if client_id and msg_type == "DATA":
+        controller.register_client_for_source(source, client_id, client_streams[client_id])
+
     try:
         routing_key = get_routing_key_from_filename(source)
         clean_columns, raw_columns = get_schema_columns_by_source(source)
