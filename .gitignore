@@ -1,6 +1,6 @@
 /stores.csv
 /transaction_items_202401.csv
-/transaction_items_202501.csv
+#/transaction_items_202501.csv
 /transactions_202401.csv
 /transactions_202501.csv
 /users_202401.csv

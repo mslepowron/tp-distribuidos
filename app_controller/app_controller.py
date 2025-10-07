@@ -84,31 +84,30 @@ class AppController:
                 except Exception as e:
                     logger.warning(f"Error closing middleware: {e}")
 
-    # def _wait_for_queues(self, queue_names, timeout=30):
-    #     """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
-    #     deadline = time.time() + timeout
-    #     while time.time() < deadline:
-    #         try:
-    #             for q in queue_names:
-    #                 # passive=True: no crea la cola, solo falla si no existe
-    #                 self.mw_input.channel.queue_declare(queue=q, passive=True)
-    #             logger.info(f"Ready: all target queues exist: {queue_names}")
-    #             return True
-    #         except pika.exceptions.ChannelClosedByBroker:
-    #             # El broker cierra el canal si la cola no existe en modo passive - reabrimos y reintentamos
-    #             self.mw_input.channel = self.mw_input.connection.channel()
-    #             time.sleep(1)
-    #         except Exception:
-    #             time.sleep(1)
-    #     logger.warning(f"Timeout esperando colas {queue_names}; enviando igual")
-    #     return False
+    def _wait_for_queues(self, queue_names, timeout=30):
+        """Verifica que las colas existan (passive=True). Reabre el canal si el broker lo cierra."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                for q in queue_names:
+                    # passive=True: no crea la cola, solo falla si no existe
+                    self.mw_input.channel.queue_declare(queue=q, passive=True)
+                logger.info(f"Ready: all target queues exist: {queue_names}")
+                return True
+            except pika.exceptions.ChannelClosedByBroker:
+                # El broker cierra el canal si la cola no existe en modo passive - reabrimos y reintentamos
+                self.mw_input.channel = self.mw_input.connection.channel()
+                time.sleep(1)
+            except Exception:
+                time.sleep(1)
+        logger.warning(f"Timeout esperando colas {queue_names}; enviando igual")
+        return False
     
     def run(self):
         self.connect_to_middleware()
         self._running = True
 
-        # self._wait_for_queues(["filter_year_q", "join_store_q"])
-        #self._wait_for_queues(["filter_year_q", "join_menu_q"])
+        self._wait_for_queues(["filter_year_q_1", "join_menu_q_1", "join_store_q_1", "join_users_q_1"])
         try:
             files_grouped = clean_all_files_grouped()
             for routing_key, filename, row_iterator in files_grouped:
