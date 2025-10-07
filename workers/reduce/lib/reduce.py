@@ -85,8 +85,6 @@ class Reduce:
                     logger.info(f"Reduced rows sent to: {rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
-            logger.error(f"ERROR SEND ROWS. HEADER: {out_header}")
-            logger.error(f"ERROR SEND ROWS. PAYLOAD: {payload}")
             logger.error(f"Error enviando resultado: {e}")
     
     def _forward_eof(self, header, stage, routing_keys=None, query_id=None):
@@ -197,55 +195,7 @@ class ProfitReducer(Reduce):
             header.fields["stage"] = "ReduceProfit"
             self._send_rows(header, "profit_reduce", result_rows, self.output_rk)
 
-        self.accumulator.clear()
-    
-    
-
-class UserPurchasesReducer(Reduce):
-    def callback(self, ch, method, properties, body):
-        header, rows = deserialize_message(body)
-
-        # Caso EOF
-        if header.fields.get("message_type") == "EOF":
-            # Emitir todo lo que se acumuló en memoria
-            self._aggregate_and_emit(header)
-            self._forward_eof(header, "ReduceUsrPurchases", self.output_rk, self.output_rk[0])
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            return
-
-        # Acumular las filas
-        for row in rows:
-            ym = row.get("year_month_created_at")
-            item = row.get("store_name")
-            logger.info(f"ROW: {row}")
-            if ym and item:
-                logger.info("AGREGO ELEMENTO")
-                self.accumulator[(ym, item)] += 1
-
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
-    def _aggregate_and_emit(self, header):
-        """Convierte el diccionario en filas y las envía todas."""
-        result_rows = []
-        for (ym, item), user_purchases in self.accumulator.items():
-            result_rows.append({
-                "store_name": ym,
-                "user_id": item,
-                "user_purchases": user_purchases
-            })
-
-        if result_rows:
-            logger.info("HAY DATA PARA ENVIAR")
-            logger.info(f"{result_rows}")
-            header.fields["schema"] = "['store_name','user_id','user_purchases']"
-            header.fields["stage"] = "ReduceUsrPurchases"
-            self._send_rows(header, "user_purchases", result_rows, self.output_rk, self.output_rk[0])
-        else:
-            logger.info("NO HAY DATA PARA ENVIAR")
-
-        self.accumulator.clear()
-    
+        self.accumulator.clear()    
     
 class TpvReducer(Reduce):
 
@@ -294,4 +244,45 @@ class TpvReducer(Reduce):
 
         self.accumulator.clear()
     
-    
+class UserPurchasesReducer(Reduce):
+    def callback(self, ch, method, properties, body):
+        header, rows = deserialize_message(body)
+
+        # Caso EOF
+        if header.fields.get("message_type") == "EOF":
+            # Emitir todo lo que se acumuló en memoria
+            self._aggregate_and_emit(header)
+            self._forward_eof(header, "ReduceUsrPurchases", self.output_rk)
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
+        # Acumular las filas
+        for row in rows:
+            user = row.get("user_id")
+            store = row.get("store_name")
+            logger.info(f"ROW: {row}")
+            if user and store:
+                self.accumulator[(user, store)] += 1
+
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+    def _aggregate_and_emit(self, header):
+        """Convierte el diccionario en filas y las envía todas."""
+        result_rows = []
+        for (user, store), user_purchases in self.accumulator.items():
+            result_rows.append({
+                "user_id": user,
+                "store_name": store,
+                "user_purchases": user_purchases
+            })
+
+        if result_rows:
+            logger.info("HAY DATA PARA ENVIAR")
+            header.fields["schema"] = "['user_id', 'store_name,'user_purchases']"
+            header.fields["stage"] = "ReduceUsrPurchases"
+            self._send_rows(header, "user_purchases", result_rows, self.output_rk)
+        else:
+            logger.info("NO HAY DATA PARA ENVIAR")
+
+        self.accumulator.clear()

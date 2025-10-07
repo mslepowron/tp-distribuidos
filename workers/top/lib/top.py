@@ -209,6 +209,14 @@ class TopStoreUserPurchases(Top):
     def start_top(self):
         self.mw.start_consuming(self.callback)
 
+    def to_csv(self, toped):
+        """Convierte el top a formato CSV en un string"""
+        result_rows = [
+                {"store_name": store, "user_id": user, "user_purchases": value}
+                for store, user, value in toped
+                ]
+        return result_rows
+
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
@@ -216,21 +224,14 @@ class TopStoreUserPurchases(Top):
 
             logger.info(f"Schema recibido: {message_schema}")
 
-            # ["store_name", "user_id", "user_purchases"]
-
             if header.fields.get("message_type") == "EOF":
-                # logger.info(f"Proceso EOF")
                 toped = self.get_top()
-                # logger.info(f"Obtengo el top {toped}")
                 result_rows = self.to_csv(toped)
-                # logger.info(f"Lo converto a csb {result_rows}")
                 header.fields["schema"] = str(["store_name", "user_id", "user_purchases"])
-                # logger.info(f"cambio schema")
                 header.fields["stage"] = "store_top" 
 
                 header_send_rows = copy.deepcopy(header)
                 header_send_rows.fields["message_type"] = "DATA"
-                # logger.info(f"cambio stage")
                 logger.info(f"RESULT ROWS: {result_rows}")
                 self._send_rows(header_send_rows, "store_top", result_rows, self.output_rk)
                 self._forward_eof(header, "store_top", routing_keys=self.output_rk)
@@ -245,7 +246,6 @@ class TopStoreUserPurchases(Top):
                 
                    
                 if store is not None and usr is not None and user_purchases is not None:
-                    logger.info(f"row {usr}: {user_purchases}")
                     self.update(store, usr, user_purchases)
                 else:
                     logger.info(f"Fila invalida")
@@ -255,6 +255,4 @@ class TopStoreUserPurchases(Top):
 
         except Exception as e:
             logger.error(f"TopStoreUserPurchases error: {e}")
-
-
 

@@ -420,6 +420,89 @@ class StoreJoin(Join):
         return out_filter, out_reduce
 
 class UserJoin(Join):
+    PIVOT_FILE = "store_top"
+    FILE_IN_BATCHS = "users"
+    SOURCE = "users_join"
+    BATCH_SZ = 1000
 
+    def define_schema(self, header, rk=None):
+        try:
+            schema = header.fields["schema"] 
+            raw_fieldnames = schema.strip()[1:-1]
+            parts = raw_fieldnames.split(",")
+
+            # limpiar cada valor
+            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+
+            fieldnames.remove("user_purchases")
+            fieldnames.append("birthdate")
+
+            return fieldnames
+        except KeyError:
+            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+
+    def on_data_message(self, source, header, rows):
+        if source.startswith(self.PIVOT_FILE):
+                self.update_index(rows, "user_id", "store_name")
+
+        elif source.startswith(self.FILE_IN_BATCHS):
+            if not self.source_file_closed:
+                storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
+                self._append_rows(storage_path, rows)
+            else:
+                joined = self._join_batch(rows)
+                self.print_joined_rows(joined)
+                self._send_rows(header, self.SOURCE, joined, self.output_rk)
+
+            return True
+        return False
+    
     def callback(self, ch, method, properties, body):
-        logger.info(f"No IMPLEMENTADO")
+        try:
+            header, rows = deserialize_message(body)
+            
+            source = (header.fields.get("source") or "").lower()
+            message_type = header.fields.get("message_type")
+            message_stage = header.fields.get("stage")
+
+            # EOF
+            if message_type == "EOF":
+                logger.info(f"EOF recibido del archivo: '{source}' proveniente de: {message_stage}")
+
+                res = self.on_eof_message(source, header)
+
+                if res:
+                    if ch is not None and hasattr(method, "delivery_tag"):
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                    return
+
+            res = self.on_data_message(source, header, rows)
+            if res:
+                if ch is not None and hasattr(method, "delivery_tag"):
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except Exception as e:
+            logger.error(f"UserJoin error: {e}")
+            if ch is not None and hasattr(method, "delivery_tag"):
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def _join_batch(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """ Hace el join sobre un batch de transacciones usando el menu indexado """
+        if not self.source_file_index:
+            return []
+
+        out = []
+        for row in rows:
+            user_id = row.get("user_id")
+           
+            if not user_id:
+                continue
+
+            if user_id in self.source_file_index:
+                out.append({
+                    "user_id": user_id,
+                    "store_name": self.source_file_index.get(user_id, ""),
+                    "birthdate": row.get("birthdate",""),
+                })
+
+        return out
