@@ -14,7 +14,6 @@ services:
       retries: 5
     cpus: "1.0"
     mem_limit: 512m
-  #  ---------------------------------------
   app_controller:
     build:
       context: .
@@ -22,8 +21,6 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      filter_year:
-        condition: service_started
     environment:
       - CONFIG_PATH=/config/config.ini
       - STORAGE_DIR=/storage
@@ -32,15 +29,28 @@ services:
       - ./app_controller/storage:/storage
     networks:
       - coffee_analysis_net
-  #  ---------------------------------------
-  filter_year:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    depends_on:
+      - app_controller
+    environment:
+      - APP_CONTROLLER_HOST=app_controller
+      - APP_CONTROLLER_PORT=9100
+    ports:
+      - "9000:9000"
+      - "9200:9200"
+    networks:
+      - coffee_analysis_net
+  filter_year_1:
     build:
       context: .
       dockerfile: workers/filter/Dockerfile
     environment:
-      - FILTER_TYPE=Year #esto puede no estar y usar el routing-key
-      - QUEUE_NAME=filter_year_q
-      - INPUT_BINDINGS=[["input_file_ex","direct","transactions"],["input_file_ex","direct","transaction_items"]]
+      - FILTER_TYPE=Year
+      - QUEUE_NAME=filter_year_q_1
+      - "INPUT_BINDINGS=[[\"input_file_ex\",\"direct\",\"transactions\"],[\"input_file_ex\",\"direct\",\"transaction_items\"]]"
       - OUTPUT_EXCHANGE=filter_year_ex
       - OUTPUT_RKS=["transactions", "transaction_items"]
     depends_on:
@@ -109,8 +119,8 @@ services:
         condition: service_healthy
     environment:
       - JOIN_TYPE=Menu
-      - QUEUE_NAME=join_menu_q
-      - INPUT_BINDINGS=[["input_file_ex","direct","menu_items"],["filter_year_ex","direct","transaction_items"]]
+      - QUEUE_NAME=join_menu_q_1
+      - "INPUT_BINDINGS=[[\"input_file_ex\",\"direct\",\"menu_items\"],[\"filter_year_ex\",\"direct\",\"transaction_items\"]]"
       - OUTPUT_EXCHANGE=menu_items_ex
       - OUTPUT_RKS=["menu_items"]
       - STORAGE_DIR=/storage
@@ -147,8 +157,8 @@ services:
         condition: service_healthy
     environment:
       - MAP_TYPE=YearMonth
-      - QUEUE_NAME=map_year_month_q
-      - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
+      - QUEUE_NAME=map_year_month_q_1
+      - "INPUT_BINDINGS=[[\"menu_items_ex\",\"direct\",\"menu_items\"]]"
       - OUTPUT_EXCHANGE=map_year_month_ex
       - OUTPUT_RKS=["quantity", "profit"]
     networks:
@@ -179,10 +189,10 @@ services:
         condition: service_healthy
     environment:
       - REDUCE_TYPE=quantity
-      - QUEUE_NAME=reduce_quantity_q
-      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
+      - QUEUE_NAME=reduce_quantity_q_1
+      - "INPUT_BINDINGS=[[\"map_year_month_ex\",\"direct\",\"quantity\"]]"
       - OUTPUT_EXCHANGE=reduce_qty_ex
-      - OUTPUT_RKS=["month_quantity"]
+      - "OUTPUT_RKS=[\"month_quantity\"]"
     networks:
       - coffee_analysis_net
   #  --------------------------------------- REDUCE Q2.2 --> este
@@ -195,8 +205,8 @@ services:
         condition: service_healthy
     environment:
       - REDUCE_TYPE=profit
-      - QUEUE_NAME=reduce_profit_q
-      - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
+      - QUEUE_NAME=reduce_profit_q_1
+      - "INPUT_BINDINGS=[[\"map_year_month_ex\",\"direct\",\"profit\"]]"
       - OUTPUT_EXCHANGE=reduce_profit_ex
       - OUTPUT_RKS=["month_profit"]
     networks:
@@ -243,10 +253,10 @@ services:
         condition: service_healthy
     environment:
       - TOP_TYPE=TopSellingItems
-      - QUEUE_NAME=top_selling_items_q
-      - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
+      - QUEUE_NAME=top_selling_items_q_1
+      - "INPUT_BINDINGS=[[\"reduce_qty_ex\",\"direct\",\"month_quantity\"]]"
       - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_month_top_qty"]
+      - "OUTPUT_RKS=[\"q_month_top_qty\"]"
     networks:
       - coffee_analysis_net
   #  --------------------------------------- TOP Q2.2---> este
@@ -259,8 +269,8 @@ services:
         condition: service_healthy
     environment:
       - TOP_TYPE=TopRevenueGeneratinItems
-      - QUEUE_NAME=top_generating_items_q
-      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
+      - QUEUE_NAME=top_generating_items_q_1
+      - "INPUT_BINDINGS=[[\"reduce_profit_ex\",\"direct\",\"month_profit\"]]"
       - OUTPUT_EXCHANGE=results_ex
       - OUTPUT_RKS=["q_month_top_rev"]
     networks:

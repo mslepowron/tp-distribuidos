@@ -3,6 +3,8 @@ import csv
 from pathlib import Path
 from typing import Iterator, Tuple
 from communication.protocol.schemas import RAW_SCHEMAS, CLEAN_SCHEMAS
+import logging
+logger = logging.getLogger("clean_rows")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_DIR = BASE_DIR
@@ -15,44 +17,42 @@ PREFIX_MAPPING = {
     "users": ("users.clean", "users.raw"),
 }
 
-# Genera tuplas con (routing_key, nombre_archivo, iterador de rows limpios)
-def clean_all_files_grouped() -> Iterator[Tuple[str, str, Iterator[dict]]]:
-    for csv_path in INPUT_DIR.glob("*.csv"):
-        filename = csv_path.name.lower().strip()
+def extract_prefix(source: str) -> str:
+    for prefix in PREFIX_MAPPING:
+        if source.startswith(prefix):
+            return prefix
+    raise ValueError(f"No se pudo extraer prefix válido de source: {source}")
 
-        if filename.startswith("users"): #me salteo enviar el users junto con los otros
+def get_schema_columns_by_source(source: str):
+    prefix = extract_prefix(source)
+    clean_key, raw_key = PREFIX_MAPPING[prefix]
+    clean_cols = CLEAN_SCHEMAS[clean_key]
+    raw_cols = RAW_SCHEMAS[raw_key]
+    return clean_cols, raw_cols
+
+def clean_rows(rows, clean_columns, raw_columns):
+    for idx, row in enumerate(rows):
+        if not all(col in row for col in raw_columns):
             continue
-        
-        for prefix, (clean_key, raw_key) in PREFIX_MAPPING.items():
-            if filename.startswith(prefix):
-                clean_columns = CLEAN_SCHEMAS[clean_key]
-                raw_columns = RAW_SCHEMAS[raw_key]
-                yield prefix, filename, _clean_csv_file(csv_path, clean_columns, raw_columns)
-                break
 
-def clean_users_files() -> Iterator[Tuple[str, str, Iterator[dict]]]:
-    for csv_path in INPUT_DIR.glob("*.csv"):
-        filename = csv_path.name.lower().strip()
-
-        # si no es un archivo de tipo user no lo proceso
-        if not filename.startswith("users"): 
-            continue
-        
-        for prefix, (clean_key, raw_key) in PREFIX_MAPPING.items():
-            if filename.startswith(prefix):
-                clean_columns = CLEAN_SCHEMAS[clean_key]
-                raw_columns = RAW_SCHEMAS[raw_key]
-                yield prefix, filename, _clean_csv_file(csv_path, clean_columns, raw_columns)
-                break
-
-# Limpia un solo archivo y devuelve filas limpias como generador.
-def _clean_csv_file(path: Path, clean_columns, raw_columns) -> Iterator[dict]:
-    with path.open(newline="", encoding="utf-8") as infile:
-        reader = csv.DictReader(infile)
-        for row in reader:
-            if not all(col in row for col in raw_columns):
-                continue
-            cleaned_row = {col: row[col].strip() for col in clean_columns if col in row}
-            if any(val == "" for val in cleaned_row.values()):
+        try:
+            cleaned_row = {}
+            for col in clean_columns:
+                val = row.get(col, None)
+                if val is None:
+                    raise ValueError(f"Columna '{col}' tiene valor None")
+                cleaned_row[col] = val.strip()
+            
+            if any(v == "" for v in cleaned_row.values()):
                 continue
             yield cleaned_row
+
+        except Exception as e:
+            logger.error(f"[clean_rows] Error limpiando fila #{idx}: {e} | Fila: {row}")
+
+def get_routing_key_from_filename(filename: str) -> str:
+    filename = filename.lower()
+    for prefix in ["transactions", "transaction_items", "stores", "menu_items", "users"]:
+        if filename.startswith(prefix):
+            return prefix
+    raise ValueError(f"No se pudo determinar routing key para filename: {filename}")
