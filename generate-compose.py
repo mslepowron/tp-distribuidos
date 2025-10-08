@@ -54,43 +54,43 @@ def app_controller():
 """
 
 def filter_year_block(i: int):
-    return f"""  filter_year_{i}:
+    return f'''  filter_year_{i}:
     build:
       context: .
       dockerfile: workers/filter/Dockerfile
     environment:
       - FILTER_TYPE=Year
       - QUEUE_NAME=filter_year_q_{i}
-      - "INPUT_BINDINGS=[[\\\"input_file_ex\\\",\\\"direct\\\",\\\"transactions\\\"],[\\\"input_file_ex\\\",\\\"direct\\\",\\\"transaction_items\\\"]]"
+      - INPUT_BINDINGS=[["input_file_ex","direct","transactions"],["input_file_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=filter_year_ex
-      - "OUTPUT_RKS=[\\\"transactions\\\", \\\"transaction_items\\\"]"
+      - OUTPUT_RKS=["transactions", "transaction_items"]
     depends_on:
       rabbitmq:
         condition: service_healthy
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def filter_hour_block(i: int):
-    return f"""  filter_hour_{i}:
+    return f'''  filter_hour_{i}:
     build:
       context: .
       dockerfile: workers/filter/Dockerfile
     environment:
       - FILTER_TYPE=Hour
       - QUEUE_NAME=filter_hour_q_{i}
-      - "INPUT_BINDINGS=[[\\\"filter_year_ex\\\",\\\"direct\\\",\\\"transactions\\\"],[\\\"join_stores_ex\\\",\\\"direct\\\",\\\"stores_joined\\\"]]"
+      - INPUT_BINDINGS=[["filter_year_ex","direct","transactions"],["join_stores_ex","direct","stores_joined"]]
       - OUTPUT_EXCHANGE=filter_hour_ex
-      - "OUTPUT_RKS=[\\\"transactions\\\", \\\"store_transactions\\\"]"
+      - OUTPUT_RKS=["transactions", "store_transactions"]
     depends_on:
       rabbitmq:
         condition: service_healthy
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def filter_amount_block(i: int):
-    return f"""  filter_amount_{i}:
+    return f'''  filter_amount_{i}:
     build:
       context: .
       dockerfile: workers/filter/Dockerfile
@@ -100,15 +100,15 @@ def filter_amount_block(i: int):
     environment:
       - FILTER_TYPE=Amount
       - QUEUE_NAME=filter_amount_q_{i}
-      - "INPUT_BINDINGS=[[\\\"filter_hour_ex\\\",\\\"direct\\\",\\\"transactions\\\"]]"
+      - INPUT_BINDINGS=[["filter_hour_ex","direct","transactions"]]
       - OUTPUT_EXCHANGE=results_ex
-      - "OUTPUT_RKS=[\\\"q_amount_75_tx\\\"]"
+      - OUTPUT_RKS=["q_amount_75_tx"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def join_stores_block(i: int):
-    return f"""  join_stores_{i}:
+    return f'''  join_stores_{i}:
     build:
       context: .
       dockerfile: workers/join/Dockerfile
@@ -118,18 +118,18 @@ def join_stores_block(i: int):
     environment:
       - JOIN_TYPE=Store
       - QUEUE_NAME=join_store_q_{i}
-      - "INPUT_BINDINGS=[[\\\"input_file_ex\\\",\\\"direct\\\",\\\"stores\\\"],[\\\"filter_year_ex\\\",\\\"direct\\\",\\\"transactions\\\"]]"
+      - INPUT_BINDINGS=[["input_file_ex","direct","stores"],["filter_year_ex","direct","transactions"]]
       - OUTPUT_EXCHANGE=join_stores_ex
-      - "OUTPUT_RKS=[\\\"stores_joined\\\", \\\"reduce_user_purchases\\\"]"
+      - OUTPUT_RKS=["stores_joined", "reduce_user_purchases"]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def join_menu_block(i: int):
-    return f"""  join_menu_{i}:
+    return f'''  join_menu_{i}:
     build:
       context: .
       dockerfile: workers/join/Dockerfile
@@ -139,18 +139,18 @@ def join_menu_block(i: int):
     environment:
       - JOIN_TYPE=Menu
       - QUEUE_NAME=join_menu_q_{i}
-      - "INPUT_BINDINGS=[[\\\"input_file_ex\\\",\\\"direct\\\",\\\"menu_items\\\"],[\\\"filter_year_ex\\\",\\\"direct\\\",\\\"transaction_items\\\"]]"
+      - INPUT_BINDINGS=[["input_file_ex","direct","menu_items"],["filter_year_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=menu_items_ex
-      - "OUTPUT_RKS=[\\\"menu_items\\\"]"
+      - OUTPUT_RKS=["menu_items"]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def join_users_block(i: int):
-    return f"""  join_users_{i}:
+    return f'''  join_users_{i}:
     build:
       context: .
       dockerfile: workers/join/Dockerfile
@@ -160,18 +160,18 @@ def join_users_block(i: int):
     environment:
       - JOIN_TYPE=User
       - QUEUE_NAME=join_users_q_{i}
-      - "INPUT_BINDINGS=[[\\\"input_file_ex\\\",\\\"direct\\\",\\\"users\\\"],[\\\"top_user_birthdays_ex\\\",\\\"direct\\\",\\\"top_user_birthdays\\\"]]"
+      - INPUT_BINDINGS=[["input_file_ex","direct","users"],["top_user_birthdays_ex","direct","top_user_birthdays"]]
       - OUTPUT_EXCHANGE=results_ex
-      - "OUTPUT_RKS=[\\\"q_top3_birthdays\\\"]"
+      - OUTPUT_RKS=["q_top3_birthdays"]
       - STORAGE_DIR=/storage
     volumes:
       - ./storage:/storage
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def map_year_month_block(i: int):
-    return f"""  map_year_month_{i}:
+    return f'''  map_year_month_{i}:
     build:
       context: .
       dockerfile: workers/map/Dockerfile
@@ -181,15 +181,15 @@ def map_year_month_block(i: int):
     environment:
       - MAP_TYPE=YearMonth
       - QUEUE_NAME=map_year_month_q_{i}
-      - "INPUT_BINDINGS=[[\\\"menu_items_ex\\\",\\\"direct\\\",\\\"menu_items\\\"]]"
+      - INPUT_BINDINGS=[["menu_items_ex","direct","menu_items"]]
       - OUTPUT_EXCHANGE=map_year_month_ex
-      - "OUTPUT_RKS=[\\\"quantity\\\", \\\"profit\\\"]"
+      - OUTPUT_RKS=["quantity", "profit"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def map_year_half_block(i: int):
-    return f"""  map_year_half_{i}:
+    return f'''  map_year_half_{i}:
     build:
       context: .
       dockerfile: workers/map/Dockerfile
@@ -199,15 +199,15 @@ def map_year_half_block(i: int):
     environment:
       - MAP_TYPE=YearHalf
       - QUEUE_NAME=map_year_half_q_{i}
-      - "INPUT_BINDINGS=[[\\\"filter_hour_ex\\\",\\\"direct\\\",\\\"store_transactions\\\"]]"
+      - INPUT_BINDINGS=[["filter_hour_ex","direct","store_transactions"]]
       - OUTPUT_EXCHANGE=map_year_half_ex
-      - "OUTPUT_RKS=[\\\"map_half\\\"]"
+      - OUTPUT_RKS=["map_half"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def reduce_quantity_block(i: int):
-    return f"""  reduce_quantity_{i}:
+    return f'''  reduce_quantity_{i}:
     build:
       context: .
       dockerfile: workers/reduce/Dockerfile
@@ -217,15 +217,15 @@ def reduce_quantity_block(i: int):
     environment:
       - REDUCE_TYPE=quantity
       - QUEUE_NAME=reduce_quantity_q_{i}
-      - "INPUT_BINDINGS=[[\\\"map_year_month_ex\\\",\\\"direct\\\",\\\"quantity\\\"]]"
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","quantity"]]
       - OUTPUT_EXCHANGE=reduce_qty_ex
-      - "OUTPUT_RKS=[\\\"month_quantity\\\"]"
+      - OUTPUT_RKS=["month_quantity"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def reduce_profit_block(i: int):
-    return f"""  reduce_profit_{i}:
+    return f'''  reduce_profit_{i}:
     build:
       context: .
       dockerfile: workers/reduce/Dockerfile
@@ -235,15 +235,15 @@ def reduce_profit_block(i: int):
     environment:
       - REDUCE_TYPE=profit
       - QUEUE_NAME=reduce_profit_q_{i}
-      - "INPUT_BINDINGS=[[\\\"map_year_month_ex\\\",\\\"direct\\\",\\\"profit\\\"]]"
+      - INPUT_BINDINGS=[["map_year_month_ex","direct","profit"]]
       - OUTPUT_EXCHANGE=reduce_profit_ex
-      - "OUTPUT_RKS=[\\\"month_profit\\\"]"
+      - OUTPUT_RKS=["month_profit"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def reduce_tpv_block(i: int):
-    return f"""  reduce_tpv_{i}:
+    return f'''  reduce_tpv_{i}:
     build:
       context: .
       dockerfile: workers/reduce/Dockerfile
@@ -253,15 +253,15 @@ def reduce_tpv_block(i: int):
     environment:
       - REDUCE_TYPE=tpv
       - QUEUE_NAME=reduce_tpv_q_{i}
-      - "INPUT_BINDINGS=[[\\\"map_year_half_ex\\\",\\\"direct\\\",\\\"map_half\\\"]]"
+      - INPUT_BINDINGS=[["map_year_half_ex","direct","map_half"]]
       - OUTPUT_EXCHANGE=results_ex
-      - "OUTPUT_RKS=[\\\"q_semester_tpv\\\"]"
+      - OUTPUT_RKS=["q_semester_tpv"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def reduce_user_purchases_block(i: int):
-    return f"""  reduce_user_purchases_{i}:
+    return f'''  reduce_user_purchases_{i}:
     build:
       context: .
       dockerfile: workers/reduce/Dockerfile
@@ -271,15 +271,15 @@ def reduce_user_purchases_block(i: int):
     environment:
       - REDUCE_TYPE=user_purchases
       - QUEUE_NAME=reduce_user_purchases_q_{i}
-      - "INPUT_BINDINGS=[[\\\"join_stores_ex\\\",\\\"direct\\\",\\\"reduce_user_purchases\\\"]]"
+      - INPUT_BINDINGS=[["join_stores_ex","direct","reduce_user_purchases"]]
       - OUTPUT_EXCHANGE=reduce_user_purchase_ex
-      - "OUTPUT_RKS=[\\\"top_user_purchase\\\"]"
+      - OUTPUT_RKS=["top_user_purchase"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def top_selling_block(i: int):
-    return f"""  top_selling_items_{i}:
+    return f'''  top_selling_items_{i}:
     build:
       context: .
       dockerfile: workers/top/Dockerfile
@@ -289,15 +289,15 @@ def top_selling_block(i: int):
     environment:
       - TOP_TYPE=TopSellingItems
       - QUEUE_NAME=top_selling_items_q_{i}
-      - "INPUT_BINDINGS=[[\\\"reduce_qty_ex\\\",\\\"direct\\\",\\\"month_quantity\\\"]]"
+      - INPUT_BINDINGS=[["reduce_qty_ex","direct","month_quantity"]]
       - OUTPUT_EXCHANGE=results_ex
-      - "OUTPUT_RKS=[\\\"q_month_top_qty\\\"]"
+      - OUTPUT_RKS=["q_month_top_qty"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def top_revenue_block(i: int):
-    return f"""  top_revenue_generating_items_{i}:
+    return f'''  top_revenue_generating_items_{i}:
     build:
       context: .
       dockerfile: workers/top/Dockerfile
@@ -307,33 +307,33 @@ def top_revenue_block(i: int):
     environment:
       - TOP_TYPE=TopRevenueGeneratinItems
       - QUEUE_NAME=top_generating_items_q_{i}
-      - "INPUT_BINDINGS=[[\\\"reduce_profit_ex\\\",\\\"direct\\\",\\\"month_profit\\\"]]"
+      - INPUT_BINDINGS=[["reduce_profit_ex","direct","month_profit"]]
       - OUTPUT_EXCHANGE=results_ex
-      - "OUTPUT_RKS=[\\\"q_month_top_rev\\\"]"
+      - OUTPUT_RKS=["q_month_top_rev"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def top_users_block(i: int):
-    return f"""  top_store_user_purchases_{i}:
+    return f'''  top_store_user_purchases_{i}:
     build:
       context: .
       dockerfile: workers/top/Dockerfile
     depends_on:
-      rabbitmq:
+      rabbitmq: 
         condition: service_healthy
     environment:
       - TOP_TYPE=TopStoreUserPurchases
       - QUEUE_NAME=top_store_user_purchases_q_{i}
-      - "INPUT_BINDINGS=[[\\\"reduce_user_purchase_ex\\\",\\\"direct\\\",\\\"top_user_purchase\\\"]]"
+      - INPUT_BINDINGS=[["reduce_user_purchase_ex","direct","top_user_purchase"]]
       - OUTPUT_EXCHANGE=top_user_birthdays_ex
-      - "OUTPUT_RKS=[\\\"top_user_birthdays\\\"]"
+      - OUTPUT_RKS=["top_user_birthdays"]
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def gateway():
-    return f"""  gateway:
+    return f'''  gateway:
     build:
       context: .
       dockerfile: gateway/Dockerfile
@@ -347,23 +347,23 @@ def gateway():
       - "9200:9200"
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def networks():
-    return f"""networks:
+    return f'''networks:
   {NETWORK_NAME}:
     ipam:
       driver: default
       config:
         - subnet: {SUBNET}
-"""
+'''
 
 def client_block(idx: int):
     # Todos leen la MISMA carpeta de datos
     data_host = "./client/data"
     report_host = f"./client/report/client_{idx}"
     os.makedirs(report_host, exist_ok=True)
-    return f"""  client_{idx}:
+    return f'''  client_{idx}:
     build:
       context: .
       dockerfile: client/Dockerfile
@@ -380,7 +380,7 @@ def client_block(idx: int):
       - {report_host}:/report
     networks:
       - {NETWORK_NAME}
-"""
+'''
 
 def generate_docker_compose(file):
     config = configparser.ConfigParser()
