@@ -148,10 +148,10 @@ class YearFilter(Filter):
             # Determino RK de salida segun cual es el archivo que me llegó
             if source.startswith("transaction_items") or method.routing_key.startswith("transaction_items"):
                 out_rk = ["transaction_items"]
-                logger.info(f"out_rk selected: transaction_items for source: {source}")
+                logger.info(f"out_rk selected: {out_rk[0]} for source: {source}")
             else:
                 out_rk = ["transactions"]
-                logger.info(f"out_rk selected: transactions for source: {source}")
+                logger.info(f"out_rk selected: {out_rk[0]} for source: {source}")
 
             self._send_rows(header, filtered, routing_keys=out_rk)
             ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -195,12 +195,12 @@ class HourFilter(Filter):
                     self._forward_eof(header, "FilterHour",routing_keys=[self.output_rk[0]])
                     ch.basic_ack(delivery_tag=method.delivery_tag)
             else:
-                logger.info(F"entra en el else del callback de hour filter")
+                # logger.info(F"Entra en el else del callback de hour filter")
                 filtered = []
                 rk = None
                 logger.info(F"Source en el data {header.fields.get('source')}")
                 for row in rows:
-                    logger.info(f"FilterHour processing stream data")
+                    # logger.info(f"FilterHour processing stream data")
                     hour = int(row["created_at"].split(" ")[1].split(":")[0])
                     if 6 <= hour < 23:
                         if header.fields["source"].startswith("store_join"):
@@ -224,21 +224,6 @@ class AmountFilter(Filter):
     def start_filter(self):
         self.mw.start_consuming(self.callback)
 
-    # def define_schema(self, header):
-    #     try:
-    #         schema = header.fields["schema"] 
-    #         raw_fieldnames = schema.strip()[1:-1]
-    #         parts = raw_fieldnames.split(",")
-    #         fieldnames = [p.strip().strip("'").strip('"') for p in parts]
-
-    #         fieldnames.remove("created_at")
-    #         fieldnames.remove("store_id")
-    #         fieldnames.remove("user_id")
-           
-    #         return fieldnames
-    #     except KeyError:
-    #         raise KeyError(f"Schema '{raw_fieldnames}' not found SCHEMAS")
-
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
@@ -252,9 +237,6 @@ class AmountFilter(Filter):
             for row in rows:
                 final_amount = float(row.get("final_amount") or 0.0)
                 if final_amount >= 75.0:
-                    # row.pop("created_at", None)
-                    # row.pop("store_id", None)
-                    # row.pop("user_id", None)
                     filtered.append(row)
 
             self._send_rows(header, filtered, routing_keys=self.output_rk, query_id=self.output_rk[0])

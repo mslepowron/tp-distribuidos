@@ -119,8 +119,8 @@ class AppController:
         self.connect_to_middleware()
         self._running = True
 
-        # self._wait_for_queues(["filter_year_q", "join_store_q"])
-        self._wait_for_queues(["filter_year_q", "join_store_q", "join_users_q"])
+        self._wait_for_queues(["filter_year_q", "join_store_q", "join_users_q", "join_menu_q"])
+        # self._wait_for_queues(["filter_year_q", "join_store_q", "join_menu_q"])
         try:
             files_grouped = clean_all_files_grouped()
             for routing_key, filename, row_iterator in files_grouped:
@@ -133,28 +133,15 @@ class AppController:
             logger.error(f"Error processing files: {e}")
 
         def callback_results(ch, method, properties, body):
-            try:
-                # Deserializar con tu nuevo protocolo
-                rk = method.routing_key  
-                logger.info(f"[results:{rk}] len={len(body)} bytes")
-                header, rows = deserialize_message(body)
-                logger.info(f"Header: {header.as_dictionary()}")
-                for row in rows:
-                    logger.info(f"Resultado recibido: {row}")
-            except Exception as e:
-                logger.error(f"Error deserializando resultado: {e}")
-            finally:
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-
-        def callback_trigger(ch, method, properties, body):
-            try:
-                logger.info(f"Recibi el trigger para enviar el archivo users")
-                # Deserializar con tu nuevo protocolo
-                rk = method.routing_key  
-                # logger.info(f"[results:{rk}] len={len(body)} bytes")
+            try:# seria el user file
                 header, _ = deserialize_message(body)
+                rk = method.routing_key  
+
                 if header.fields.get("message_type") == "FILE":
                     try:
+                        logger.info(f"=========================================================================")
+                        logger.info(f"======================== Solicitud de archivo: {rk} =====================")
+                        logger.info(f"=========================================================================")
                         files_grouped = clean_users_files()
                         for routing_key, filename, row_iterator in files_grouped:
                             queries = QUERY_IDS_BY_FILE.get(routing_key, [])
@@ -164,14 +151,27 @@ class AppController:
 
                     except Exception as e:
                         logger.error(f"Error processing files: {e}")
+                elif header.fields.get("message_type") == "EOF":
+                    logger.info(f"===================== EOF of [{rk}] =======================")
+                else:
+                    
+                    logger.info(f"=========================================================================")
+                    logger.info(f"===================== [Results:{rk}] len={len(body)} bytes ==============")
+                    logger.info(f"=========================================================================")
+                    
+                    header, rows = deserialize_message(body)
+                    logger.info(f"Header: {header.as_dictionary()}")
+                    n=0
+                    for row in rows:
+                        n+=1
+                        logger.info(f"Row_{n}: {row}")
+
+                logger.info(f"=========================================================================")
+
             except Exception as e:
                 logger.error(f"Error deserializando resultado: {e}")
             finally:
                 ch.basic_ack(delivery_tag=method.delivery_tag)
-
-
-        logger.info(f"Esperando para enviar el users '{self.result_sink_queue}'...")
-        self.trigger_mw.start_consuming(callback_trigger)
 
         logger.info(f"Esperando resultados en queue '{self.result_sink_queue}'...")
         try:

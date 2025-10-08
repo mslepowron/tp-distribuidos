@@ -39,17 +39,12 @@ def main():
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume
         )
         
-        trigger_ex = "trigger"
-        trigger_mw = MessageMiddlewareExchange(
-            host="rabbitmq",
-            queue_name="trigger_q.out"  # cola solo para tener canal; no se consume
-        )
 
         storage = Path(os.getenv("STORAGE_DIR", "storage"))
         logger.info(f"STORAGE: {storage}")
         logger.info(f"routing keys: {output_rks}")
 
-        j = JoinFactory.create(join_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage, trigger_mw, trigger_ex)
+        j = JoinFactory.create(join_type, mw_in, mw_out, output_exchange, output_rks, input_bindings, storage)
 
         j.start()
 

@@ -72,9 +72,11 @@ class Map:
             payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  #caso fanout; aca nos aplica para el hours
+                logger.info(f"Sending batch to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
+                    logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
@@ -93,9 +95,11 @@ class Map:
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
+                logger.info(f"Sending EOF to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
+                    logger.info(f"Sending EOF to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -103,8 +107,14 @@ class Map:
 
     def print_rows(self, rows):
         logger.info(f"-----------------------------------------------------------------------------------------------------")
-        logger.info(f"Imprimo rows")
         n=0
+        
+        if len(rows) < 0:
+            logger.info(f"MAP VACIO")
+            return
+        else:      
+            logger.info(f"Imprimo rows")
+        
         for row in rows:
             n+=1
             logger.info(f"Row_{n}: {row}")

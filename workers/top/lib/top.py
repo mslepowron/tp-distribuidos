@@ -62,9 +62,8 @@ class Top:
             return
         try:
             schema = self.define_schema(header)
-            logging.info(f"SEND ROWS HEADER: {header.fields}")
             out_header = Header({
-                "message_type": header.fields["message_type"],
+                "message_type": "DATA",
                 "query_id": query_id if query_id is not None else header.fields["query_id"],
                 "stage": header.fields.get("stage"),
                 "part": header.fields["part"],
@@ -72,14 +71,17 @@ class Top:
                 "schema": schema,
                 "source": source,
             })
+
+            logging.info(f"SEND ROWS HEADER: {out_header.fields}")
+            
             payload = serialize_message(out_header, rows, schema)
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  #caso fanout; aca nos aplica para el hours
-                logger.info(f"Envio data a {self.output_exchange} con FANOUT")
+                logger.info(f"Sending batch to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in rks:
-                    logger.info(f"Envio data a {self.output_exchange} con la rk {rk}")
+                    logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
@@ -98,11 +100,11 @@ class Top:
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             rks = self.output_rk if routing_keys is None else routing_keys
             if not rks:  # fanout
-                logger.info(f"Send EOF through {self.output_exchange} FANOUT")
+                logger.info(f"Sending EOF to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in rks:
-                    logger.info(f"Send EOF through {self.output_exchange} with rk {rk}")
+                    logger.info(f"Sending EOF to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -140,7 +142,10 @@ class TopSellingItems(Top):
                 result_rows = self.to_csv(toped)
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "selling_qty"])
                 header.fields["stage"] = "TopSellingItems"
-                logger.info(f"RESULT ROWS: {result_rows}")
+
+                logger.info(f"Filas enviadas {len(result_rows)}")
+                logger.info(f"Ej Fila: {result_rows[0]}")
+
                 self._send_rows(header, "TopSellingItems", result_rows, self.output_rk, self.output_rk[0])
                 self._forward_eof(header, "TopSellingItems", self.output_rk, self.output_rk[0])
 
@@ -154,6 +159,9 @@ class TopSellingItems(Top):
                 #logger.info(f"row {item}: {count}")
                 if ym is not None and item is not None and count is not None:
                     self.update(ym, item, count)
+                else:
+                    logger.info(f"Fila invalida: ym={ym}, item={item}, count={count}")
+                    
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -176,14 +184,16 @@ class TopRevenueGeneratingItems(Top):
     def callback(self, ch, method, properties, body):
         try:
             header, rows = deserialize_message(body)
-            logger.info(f"recibo rows")
 
             if header.fields.get("message_type") == "EOF":
                 toped = self.get_top()
                 result_rows = self.to_csv(toped)
                 header.fields["schema"] = str(["year_month_created_at", "item_name", "profit_sum"])
                 header.fields["stage"] = "TopRevenueGeneratingItems"
-                logger.info(f"RESULT ROWS: {result_rows}")
+                
+                logger.info(f"Filas enviadas {len(result_rows)}")
+                logger.info(f"Ej Fila: {result_rows[0]}")
+                
                 self._send_rows(header, "TopRevenueGeneratingItems", result_rows, self.output_rk, self.output_rk[0])
                 self._forward_eof(header, "TopRevenueGeneratingItems", self.output_rk, self.output_rk[0])
 
@@ -197,6 +207,9 @@ class TopRevenueGeneratingItems(Top):
                 # logger.info(f"row {item}: {sum}")
                 if ym is not None and item is not None and sum is not None:
                     self.update(ym, item, sum)
+                else:
+                    logger.info(f"Schema recibido: {header.fields.get('schema')}")
+                    logger.info(f"Fila invalida: ym={ym}, item={item}, sum={sum}")
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -232,7 +245,10 @@ class TopStoreUserPurchases(Top):
 
                 header_send_rows = copy.deepcopy(header)
                 header_send_rows.fields["message_type"] = "DATA"
-                logger.info(f"RESULT ROWS: {result_rows}")
+
+                logger.info(f"Filas enviadas {len(result_rows)}")
+                logger.info(f"Ej Fila: {result_rows[0]}")
+
                 self._send_rows(header_send_rows, "store_top", result_rows, self.output_rk)
                 self._forward_eof(header, "store_top", routing_keys=self.output_rk)
 
@@ -248,7 +264,7 @@ class TopStoreUserPurchases(Top):
                 if store is not None and usr is not None and user_purchases is not None:
                     self.update(store, usr, user_purchases)
                 else:
-                    logger.info(f"Fila invalida")
+                    logger.info(f"Fila invalida: store={store}, usr={usr}, user_purchases={user_purchases}")
 
 
             ch.basic_ack(delivery_tag=method.delivery_tag)

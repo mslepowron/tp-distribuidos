@@ -79,10 +79,11 @@ class Reduce:
             payload = serialize_message(out_header, rows, schema)
 
             if not routing_keys:  #caso fanout; 
+                logger.info(f"Sending batch to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in routing_keys:
-                    logger.info(f"Reduced rows sent to: {rk}")
+                    logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error enviando resultado: {e}")
@@ -100,11 +101,14 @@ class Reduce:
             })
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
             
+            # logger.info(f"SEND EOF sent header: {out_header}")
+            
             if not routing_keys:  # fanout
+                logger.info(f"Sending EOF to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in routing_keys:
-                    logger.info(f"SEND EOF sent header: {out_header}")
+                    logger.info(f"Sending EOF to next worker through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -131,6 +135,8 @@ class QuantityReducer(Reduce):
             item = row.get("item_name")
             if ym and item:
                 self.accumulator[(ym, item)] += 1
+            else:
+                logger.info(f"Fila invalida: ym={ym}, item={item}")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -146,6 +152,9 @@ class QuantityReducer(Reduce):
             })
 
         if result_rows:
+            logger.info(f"Filas enviadas {len(result_rows)}")
+            logger.info(f"Ej Fila: {result_rows[0]}")
+
             header.fields["schema"] = "['year_month_created_at','item_name','selling_qty']"
             header.fields["stage"] = "ReduceQuantity"
             self._send_rows(header, "quantity_reduce", result_rows, self.output_rk)
@@ -176,6 +185,8 @@ class ProfitReducer(Reduce):
             subtotal = float(row.get("subtotal") or 0.0)
             if ym and item:
                 self.accumulator[(ym, item)] += subtotal
+            else:
+                logger.info(f"Fila invalida: ym={ym}, item={item}")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -191,6 +202,9 @@ class ProfitReducer(Reduce):
             })
 
         if result_rows:
+            logger.info(f"Filas enviadas {len(result_rows)}")
+            logger.info(f"Ej Fila: {result_rows[0]}")
+            
             header.fields["schema"] = "['year_month_created_at','item_name','profit_sum']"
             header.fields["stage"] = "ReduceProfit"
             self._send_rows(header, "profit_reduce", result_rows, self.output_rk)
@@ -215,10 +229,10 @@ class TpvReducer(Reduce):
             ym = row.get("year_half_created_at")
             item = row.get("store_name")
             final_amount = float(row.get("final_amount") or 0.0)
-            logger.info(f"ROW: {row}")
             if ym and item:
-                logger.info("AGREGO ELEMENTO")
                 self.accumulator[(ym, item)] += final_amount
+            else:
+                logger.info(f"Fila invalida: ym={ym}, item={item}")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -234,8 +248,9 @@ class TpvReducer(Reduce):
             })
 
         if result_rows:
-            logger.info("HAY DATA PARA ENVIAR")
-            logger.info(f"{result_rows}")
+            logger.info(f"Filas enviadas {len(result_rows)}")
+            logger.info(f"Ej Fila: {result_rows[0]}")
+
             header.fields["schema"] = "['year_half_created_at','item_name','tpv']"
             header.fields["stage"] = "ReduceTPV"
             self._send_rows(header, "tpv_reduce", result_rows, self.output_rk, self.output_rk[0])
@@ -260,9 +275,10 @@ class UserPurchasesReducer(Reduce):
         for row in rows:
             user = row.get("user_id")
             store = row.get("store_name")
-            logger.info(f"ROW: {row}")
             if user and store:
                 self.accumulator[(user, store)] += 1
+            else:
+                logger.info(f"Fila invalida: user={user}, store={store}")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -278,7 +294,9 @@ class UserPurchasesReducer(Reduce):
             })
 
         if result_rows:
-            logger.info("HAY DATA PARA ENVIAR")
+            logger.info(f"Filas enviadas {len(result_rows)}")
+            logger.info(f"Ej Fila: {result_rows[0]}")
+
             header.fields["schema"] = "['user_id', 'store_name,'user_purchases']"
             header.fields["stage"] = "ReduceUsrPurchases"
             self._send_rows(header, "user_purchases", result_rows, self.output_rk)

@@ -14,7 +14,7 @@ class Join:
     REQUIRED_STREAMS: Tuple[str, str] = () #define que dos streams de datos debe esperar para hacer el join
     OUTPUT_FILE_BASENAME: str = None  #archivo donde se guarda el resultado del join
 
-    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage, trigger_mw=None, trigger_ex=None):
+    def __init__(self, mw_in, mw_out, output_exchange: str, output_rks, input_bindings, storage):
         self.mw = mw_in
         self.result_mw = mw_out
         self.output_exchange = output_exchange
@@ -29,9 +29,6 @@ class Join:
         else:
             self.output_rk = output_rks or []
         
-        self.trigger_mw = trigger_mw
-        self.trigger_ex = trigger_ex
-
     def start(self):
         try:
             logger.info("Waiting for messages...")
@@ -75,7 +72,7 @@ class Join:
         try:
             schema = self.define_schema(header, routing_keys)
 
-            logger.info(f"schema {schema}")
+            logger.info(f"Schema en send roes: {schema}")
 
             out_header = Header({
                 "message_type": "DATA",
@@ -90,7 +87,7 @@ class Join:
             payload = serialize_message(out_header, rows, schema)
             
             if not routing_keys:
-                logger.info(f"Sending batch to next worker through: {self.output_exchange} with rk={routing_keys}")
+                logger.info(f"Sending batch to next worker through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in routing_keys:
@@ -114,10 +111,11 @@ class Join:
             eof_payload = serialize_message(out_header, [], header.fields["schema"])
 
             if not routing_keys:  
+                logger.info(f"Sending EOF through: {self.output_exchange} with FANOUT")
                 self.result_mw.send_to(self.output_exchange, "", eof_payload)
             else:
                 for rk in routing_keys:
-                    logger.info(f"Envio eof a --->{rk}")
+                    logger.info(f"Sending EOF through: {self.output_exchange} with rk={rk}")
                     self.result_mw.send_to(self.output_exchange, rk, eof_payload)
         except Exception as e:
             logger.error(f"Error reenviando EOF: {e}")
@@ -201,6 +199,8 @@ class Join:
             # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
             if self.source_file_closed:
                 self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
+            else:
+                logger.error(f"Llegoo el EOF de {self.FILE_IN_BATCHS}, pero no de {self.PIVOT_FILE}")
 
             return True
 
@@ -208,8 +208,14 @@ class Join:
 
     def print_joined_rows(self, rows):
         logger.info(f"-----------------------------------------------------------------------------------------------------")
-        logger.info(f"Imprimo rows")
         n=0
+        
+        if len(rows) < 0:
+            logger.info(f"JOIN VACIO")
+            return
+        else:      
+            logger.info(f"Imprimo rows")
+
         for row in rows:
             n+=1
             logger.info(f"Row_{n}: {row}")
@@ -244,6 +250,7 @@ class MenuJoin(Join):
 
         elif source.startswith(self.FILE_IN_BATCHS):
             if not self.source_file_closed:
+                logger.info("No llego completo el archivo pivot, almaceno temporalmente el Batch")
                 storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
                 self._append_rows(storage_path, rows)
             else:
@@ -340,6 +347,8 @@ class StoreJoin(Join):
             # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
             if self.source_file_closed:
                 self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
+            else:
+                logger.error(f"Llegoo el EOF de {self.FILE_IN_BATCHS}, pero no de {self.PIVOT_FILE}")
 
             return True
 
@@ -351,6 +360,7 @@ class StoreJoin(Join):
 
         elif source.startswith(self.FILE_IN_BATCHS):
             if not self.source_file_closed:
+                logger.info("No llego completo el archivo pivot, almaceno temporalmente el Batch")
                 storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
                 self._append_rows(storage_path, rows)
             else:
@@ -430,19 +440,18 @@ class UserJoin(Join):
 
     def define_schema(self, header, rk=None):
         try:
-            schema = header.fields["schema"] 
-            raw_fieldnames = schema.strip()[1:-1]
-            parts = raw_fieldnames.split(",")
+            # schema = header.fields["schema"] 
+            # raw_fieldnames = schema.strip()[1:-1]
+            # parts = raw_fieldnames.split(",")
 
-            # limpiar cada valor
-            fieldnames = [p.strip().strip("'").strip('"') for p in parts]
+            # # limpiar cada valor
+            # fieldnames = [p.strip().strip("'").strip('"') for p in parts]
 
-            fieldnames.remove("user_purchases")
-            fieldnames.append("birthdate")
-
+            # fieldnames.append("birthdate")
+            fieldnames = ['user_id', 'store_name', 'birthdate']
             return fieldnames
         except KeyError:
-            raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
+            raise KeyError(f"Schema del use join")
 
     def on_data_message(self, source, header, rows):
         if source.startswith(self.PIVOT_FILE):
@@ -450,6 +459,7 @@ class UserJoin(Join):
 
         elif source.startswith(self.FILE_IN_BATCHS):
             if not self.source_file_closed:
+                logger.info("No llego completo el archivo pivot, almaceno temporalmente el Batch")
                 storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
                 self._append_rows(storage_path, rows)
             else:
@@ -463,7 +473,6 @@ class UserJoin(Join):
     def on_eof_message(self, source, header):
         if source.startswith(self.PIVOT_FILE):
             self.source_file_closed = True
-            storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
             
             out_header = Header({
                 "message_type": "FILE",
@@ -476,14 +485,17 @@ class UserJoin(Join):
             })
 
             payload = serialize_message(out_header, [], [])
+            logger.info("Solicito el archivo users al app_controller")
             # PIDO EL OTRO ARCHIVO
-            self.trigger_mw.send_to(self.trigger_ex, "users_file", payload)
+            self.result_mw.send_to(self.output_exchange, "users_file", payload)
 
         elif source.startswith(self.FILE_IN_BATCHS):
             # si todavia ya me llego completo el archivo a almacenar entonces fowardeo el EOF
             if self.source_file_closed:
                 self._forward_eof(header, self.SOURCE, routing_keys=self.output_rk)
-
+            else:
+                logger.error(f"Llegoo el EOF de {self.FILE_IN_BATCHS}, pero no de {self.PIVOT_FILE}")
+                
             return True
 
         return False
