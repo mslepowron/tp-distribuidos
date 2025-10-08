@@ -8,7 +8,7 @@ import io
 import os
 from pathlib import Path
 from communication.protocol.deserialize import deserialize_message  
-from sender import Sender 
+from sender import Sender, send_end_of_file 
 logger = logging.getLogger("Client")
 logging.basicConfig(level=logging.INFO)
 
@@ -57,6 +57,7 @@ class Client:
                 sender.send_dataset(file_path)
 
         logger.info("All datasets sent successfully.")
+        sender.send_eof()
         self._wait_for_reports()
 
     def _connect(self, retries=MAX_RETRIES, delay=DELAY_BETWEEN_RETRIES):

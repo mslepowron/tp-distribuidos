@@ -92,3 +92,17 @@ class Sender:
             logger.error(f"Error sending data: {e}")
             raise
 
+    def send_eof(self):
+        header = Header([
+            ("message_type", "EOF"),
+            ("query_id", "BROADCAST"),
+            ("stage", "init"),
+            ("part", "EOF"),
+            ("seq", "end"),
+            ("schema", "[]"),
+            ("source", "eof"),
+        ])
+        message = serialize_message(header, [], [])
+        self._send_all(message)
+        logger.info("EOF message sent.")
+
