@@ -8,7 +8,7 @@ import io
 import os
 from pathlib import Path
 from communication.protocol.deserialize import deserialize_message  
-from sender import Sender 
+from sender import Sender
 logger = logging.getLogger("Client")
 logging.basicConfig(level=logging.INFO)
 
@@ -58,15 +58,8 @@ class Client:
             for file_path in matching_files:
                 logger.info(f"Sending file: {file_path.name}")
                 sender.send_dataset(file_path)
-        # for base in FILE_BASENAMES:
-        #     matching_files = sorted(self.input_dir.glob(f"{base}*.csv"))
-        #     if not matching_files:
-        #         logger.info(f"No files found for prefix: {base}")
-        #         continue
 
-        #     for file_path in matching_files:
-        #         logger.info(f"Sending file: {file_path.name}")
-        #         sender.send_dataset(file_path)
+            sender.send_eof_for_routing_key(base)
 
         logger.info("All datasets sent successfully.")
         self._wait_for_reports()
@@ -77,8 +70,7 @@ class Client:
             try:
                 self.socket.connect((self.host, self.port))
                 logger.info(f"Connected to gateway at {self.host}:{self.port}")
-                self._receive_ack()
-                self._wait_for_controller_ok()
+                self._recv_handshake()
                 return
             except Exception as e:
                 attempt += 1
@@ -89,14 +81,13 @@ class Client:
                 else:
                     logger.error("Max connection attempts reached.")
 
-    # recibe el ack del gateway y guarda el client_id
-    def _receive_ack(self):
+    def _recv_handshake(self):
         try:
             buffer = b""
-            while b"\n===\n" not in buffer:
+            while buffer.count(SEPARATOR) < 2:
                 chunk = self.socket.recv(1024)
                 if not chunk:
-                    raise ConnectionError("Disconnected before receiving ACK.")
+                    raise ConnectionError("Disconnected during handshake.")
                 buffer += chunk
 
             result = deserialize_message(buffer)
@@ -104,30 +95,19 @@ class Client:
                 header, rows, schema = result
             else:
                 header, rows = result
-            client_id = header.fields.get("source", "")
-            logger.info(f"Received ACK from Gateway. Assigned client_id: {client_id}")
-            self.client_id = client_id
-        except Exception as e:
-            logger.error(f"Failed to receive ACK: {e}")
-            logger.info("Message contained:")
-            logger.info(buffer.decode("utf-8"))
-            self.close_socket = True
-    
-    def _wait_for_controller_ok(self):
-        try:
-            buffer = b""
-            while b"CONTROLLER OK" not in buffer:
-                chunk = self.socket.recv(1024)
-                if not chunk:
-                    logger.error("No se recibió CONTROLLER OK del Gateway.")
-                    self.close_socket = True
-                    return
-                buffer += chunk
-            logger.info("Recibido CONTROLLER OK del Gateway.")
-        except Exception as e:
-            logger.error(f"Error esperando CONTROLLER OK: {e}")
-            self.close_socket = True
+            self.client_id = header.fields.get("source", "")
+            logger.info(f"Received ACK from Gateway. Assigned client_id: {self.client_id}")
 
+            # Buscar CONTROLLER OK al final
+            if b"CONTROLLER OK" not in buffer:
+                logger.error("CONTROLLER OK not received after ACK.")
+                self.close_socket = True
+                return
+            logger.info("Recibido CONTROLLER OK del Gateway.")
+
+        except Exception as e:
+            logger.error(f"Error during handshake: {e}")
+            self.close_socket = True
     def _signal_handler(self, signum, frame):
         logger.info("Signal received, stopping client...")
         self._stop_client()
@@ -137,9 +117,8 @@ class Client:
         
         try:
             buffer = b""
-            logger.info(f"Raw header buffer:\n{buffer.decode('utf-8', errors='replace')}")
             while True:
-                # Leer más datos si no tenemos al menos 2 separadores
+                # Leer hasta tener un header completo (client_id === query_id ===)
                 while buffer.count(SEPARATOR) < 2:
                     chunk = self.socket.recv(1024)
                     if not chunk:
@@ -147,21 +126,11 @@ class Client:
                         return
                     buffer += chunk
                 
-                # Extraer header completo (client_id + query_id)
-                header_end = buffer.find(SEPARATOR)
-                part1 = buffer[:header_end]
-                rest = buffer[header_end + len(SEPARATOR):]
-
-                second_sep = rest.find(SEPARATOR)
-                if second_sep == -1:
-                    logger.warning("Incomplete header. Waiting for more data...")
-                    continue
-
-                part2 = rest[:second_sep]
-                csv_remainder = rest[second_sep + len(SEPARATOR):]
-
-                recv_client_id = part1.decode().strip()
-                query_id = part2.decode().strip()
+                # Extraer header (client_id y query_id)
+                parts = buffer.split(SEPARATOR, 2)
+                recv_client_id = parts[0].decode().strip()
+                query_id = parts[1].decode().strip()
+                buffer = parts[2] # El resto es el inicio del CSV
 
                 logger.info(f"Report header received. client_id={recv_client_id}, query_id={query_id}")
 
@@ -170,26 +139,32 @@ class Client:
                 output_path = base_report_dir / f"{query_id}.csv"
 
                 with output_path.open("wb") as f:
-                    f.write(csv_remainder)
-
-                    # Continuar leyendo el resto del archivo hasta que empiece otro reporte
-                    while True:
-                        chunk = self.socket.recv(8192)
-                        if not chunk:
-                            logger.info(f"Stream finished for query_id={query_id}")
-                            return
-                        if chunk.count(SEPARATOR) >= 2:
-                            buffer = chunk
+                    # Bucle para recibir los datos de UN solo reporte
+                    while SEPARATOR not in buffer:
+                        f.write(buffer)
+                        buffer = self.socket.recv(8192)
+                        if not buffer:
+                            logger.warning(f"Connection closed unexpectedly while receiving report for {query_id}")
                             break
-                        f.write(chunk)
+                    
+                    # Escribir la última parte del reporte (antes del delimitador)
+                    if SEPARATOR in buffer:
+                        end_index = buffer.find(SEPARATOR)
+                        f.write(buffer[:end_index])
+                        # Guardar lo que sobró para la siguiente vuelta del bucle principal
+                        buffer = buffer[end_index + len(SEPARATOR):]
 
                 logger.info(f"Report saved for query_id={query_id} at {output_path}")
 
         except Exception as e:
-            logger.error(f"Error while waiting for reports: {e}")
+            # No es un error si el socket se cierra normalmente al final
+            if isinstance(e, (ConnectionResetError, BrokenPipeError)):
+                logger.info("All reports received. Connection finished.")
+            else:
+                logger.error(f"Error while waiting for reports: {e}", exc_info=True)
         finally:
             self._stop_client()
-
+            
     def _stop_client(self):
         try:
             if self.socket:

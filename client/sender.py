@@ -68,6 +68,24 @@ class Sender:
 
         logger.info(f"Finished sending {filename}")
 
+    def send_eof_for_routing_key(self, routing_key: str):
+        """
+        Envía un mensaje EOF al Gateway para una routing key específica.
+        """
+        header = Header([
+            ("message_type", "EOF"),
+            ("query_id", "BROADCAST"),
+            ("stage", "init"),
+            ("part", routing_key),
+            ("seq", "EOF"),
+            ("schema", "[]"),
+            ("source", routing_key),
+        ])
+
+        message = serialize_message(header, [], [])
+        self._send_all(message + SEPARATOR)
+        logger.info(f"Sending EOF for routing key: {routing_key}")
+        
     def _send_rows_as_message(self, rows, schema, source_filename):
         header = Header([
             ("message_type", "DATA"),

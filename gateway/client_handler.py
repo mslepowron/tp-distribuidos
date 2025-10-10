@@ -36,19 +36,26 @@ class ClientHandler(threading.Thread):
             self._client_socket.close()
         except Exception as e:
             logger.info(f"Error closing client socket: {e}")
-
+    
     def run(self):
         logger.info(f"ClientHandler thread started for {self._client_id}")
+
         try:
             with socket.create_connection((self.app_controller_host, self.app_controller_port)) as controller_sock:
-                logger.info(f"Connected to AppController at {self.app_controller_host}:{self.app_controller_port}")
-                # Esperar el mensaje de "CONTROLLER OK"
+                logger.info("Connected to AppController")
+
+                # 1. Enviar client_id al AppController
+                client_id_msg = f"{self._client_id}\n===\n".encode("utf-8")
+                controller_sock.sendall(client_id_msg)
+                logger.info("Sent client_id to AppController")
+
+                # 2. Esperar CONTROLLER OK
                 ok_msg = controller_sock.recv(1024)
                 if b"CONTROLLER OK" not in ok_msg:
-                    logger.error("No se recibió CONTROLLER OK del AppController. Cerrando conexión.")
+                    logger.error("No CONTROLLER OK received")
                     return
-                logger.info("Recibido CONTROLLER OK del AppController.")
 
+                # 3. Enviar ACK + CONTROLLER OK al Client
                 ack_header = Header([
                     ("message_type", "ACK"),
                     ("query_id", "BROADCAST"),
@@ -58,58 +65,64 @@ class ClientHandler(threading.Thread):
                     ("schema", "[]"),
                     ("source", self._client_id),
                 ])
-                ack_message = serialize_message(ack_header, [], [])
-                self._client_socket.sendall(ack_message)
-                logger.info(f"Sent ACK with client ID {self._client_id} to {self._client_addr}")
-
-                # 2. Enviar CONTROLLER OK al cliente
+                ack_msg = serialize_message(ack_header, [], [])
+                self._client_socket.sendall(ack_msg)
                 self._client_socket.sendall(ok_msg)
-                logger.info("Reenviado CONTROLLER OK al cliente.")
 
-                first = True
-                threading.Thread(target=self._recv_from_controller_and_send_to_client, args=(controller_sock,), daemon=True).start()
+                # 4. Forward controller → client (REPORT)
+                threading.Thread(
+                    target=self._recv_from_controller_and_send_to_client,
+                    args=(controller_sock,),
+                    daemon=True
+                ).start()
+
+                # 5. Forward client → controller (con buffer y separación por SEPARATOR)
+                buffer = b""
+                msg_counter = 0
                 while not self._stop_flag.is_set():
-                    data = self._client_socket.recv(8192)
-                    if not data:
-                        logger.info(f"Client {self._client_id} closed connection.")
+                    chunk = self._client_socket.recv(8192)
+                    if not chunk:
+                        logger.info(f"[Client→Controller] Client {self._client_id} closed connection")
                         break
 
-                    if first:
-                        prefix = f"{self._client_id}\n===\n".encode("utf-8")
-                        data = prefix + data
-                        first = False
+                    logger.info(f"[Client→Controller] Recibidos {len(chunk)} bytes de client {self._client_id}")
+                    logger.info(f"[Client→Controller] Chunk crudo:\n{chunk.decode('utf-8', errors='replace')}")
 
-                    logger.info(f"Received {len(data)} bytes from client {self._client_id}")
-                    controller_sock.sendall(data)
-                    logger.info(f"Forwarded {len(data)} bytes to AppController")
-            
-            # with socket.create_connection((self.app_controller_host, self.app_controller_port)) as controller_sock:
-            #     logger.info(f"Connected to AppController at {self.app_controller_host}:{self.app_controller_port}")
+                    buffer += chunk
+                    while buffer.count(SEPARATOR) >= 2:
+                        # Encontrar mensaje completo
+                        first_sep = buffer.find(SEPARATOR)
+                        header_part = buffer[:first_sep]
+                        remainder = buffer[first_sep + len(SEPARATOR):]
 
-            #     first = True
-            #     threading.Thread(target=self._recv_from_controller_and_send_to_client, args=(controller_sock,), daemon=True).start()
-            #     while not self._stop_flag.is_set():
-            #         data = self._client_socket.recv(8192)
-            #         if not data:
-            #             logger.info(f"Client {self._client_id} closed connection.")
-            #             break
+                        second_sep = remainder.find(SEPARATOR)
+                        if second_sep == -1:
+                            # mensaje incompleto
+                            break
 
-            #         if first:
-            #             # Prefix client_id + separador al primer mensaje
-            #             prefix = f"{self._client_id}\n===\n".encode("utf-8")
-            #             data = prefix + data
-            #             first = False
+                        payload_part = remainder[:second_sep]
+                        buffer = remainder[second_sep + len(SEPARATOR):]
 
-            #         logger.info(f"Received {len(data)} bytes from client {self._client_id}")
-            #         controller_sock.sendall(data)  
-            #         logger.info(f"Forwarded {len(data)} bytes to AppController")
+                        complete_msg = header_part + SEPARATOR + payload_part + SEPARATOR
+                        msg_counter += 1
 
+                        header_str = header_part.decode('utf-8', errors='replace')
+                        payload_str = payload_part.decode('utf-8', errors='replace')
+                        logger.info(f"[Client→Controller] ↪ MSG #{msg_counter} listo para enviar (len={len(complete_msg)})")
+                        logger.info(f"  ├─ Header:\n{header_str}")
+                        logger.info(f"  └─ Payload:\n{payload_str if payload_str else '<VACÍO>'}")
+                        
+                        controller_sock.sendall(complete_msg)
+                        logger.info(f"[Client→Controller] MSG #{msg_counter} reenviado al AppController")
+                
+                if buffer.strip():
+                    logger.warning(f"[Client→Controller] Buffer residual sin enviar:\n{buffer.decode('utf-8', errors='replace')}")
 
         except Exception as e:
-            logger.error(f"Error in ClientHandler {self._client_id}: {e}")
+            logger.error(f"Error in ClientHandler: {e}")
         finally:
             self._stop_client()
-    
+
     def _recv_from_controller_and_send_to_client(self, controller_sock: socket.socket):
         logger.info(f"Started forwarding thread for client {self._client_id}")
         try:
@@ -120,7 +133,6 @@ class ClientHandler(threading.Thread):
                     break
                 self._client_socket.sendall(data)
                 logger.info(f"[REPORT] Forwarded {len(data)} bytes to client {self._client_id}")
-                logger.info(f"Raw report data:\n{data.decode('utf-8', errors='replace')}")
         except Exception as e:
             logger.error(f"[REPORT] Error forwarding to client: {e}")
             self._stop_client()

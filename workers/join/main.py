@@ -34,6 +34,8 @@ def main():
             bindings=[(ex, ex_type, rk) for ex, ex_type, rk in input_bindings]
         )
 
+        logger.info(f"[JOIN INIT] Bindings declarados: {input_bindings}")
+
         mw_out = MessageMiddlewareExchange(
             host="rabbitmq",
             queue_name=f"{queue_name}.out"  # cola solo para tener canal; no se consume

@@ -29,21 +29,13 @@ def start_tcp_listener(port, controller):
             threading.Thread(target=handle_connection, args=(conn, addr, controller), daemon=True).start()
 
 def handle_connection(conn: socket.socket, addr, controller: AppController):
-    logger.info(f"[GATEWAY] Conexión entrante desde {addr}")
-    
-    while not controller.is_available():
-        logger.info("App controller no esta listo, espero")
-        time.sleep(5)
-
-    # controller.notify_gateway_controller_is_up()
-    conn.sendall(f"===\nCONTROLLER OK\n===\n".encode("utf-8"))
+    logger.info(f"[GATEWAY] Esperando client_id desde {addr}")
 
     buffer = b""
     while buffer.count(SEPARATOR) < 1:
         chunk = conn.recv(BUFFER_SIZE)
         if not chunk:
             logger.error("[GATEWAY] No se recibió client_id inicial.")
-            logger.error(f"Buffer recibido: {buffer!r}")
             return
         buffer += chunk
 
@@ -52,33 +44,98 @@ def handle_connection(conn: socket.socket, addr, controller: AppController):
     remainder = parts[1] if len(parts) > 1 else b""
 
     logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
-    client_streams[client_id] = conn  # registrar conexión viva
+    client_streams[client_id] = conn
+    controller.register_client_stream(client_id, conn)
+    logger.info(f"[GATEWAY] Registrado stream de client_id={client_id} en AppController")
+
+    routing_keys_vistos = set()
+    buffer = remainder
+    accumulated_rows = []
+    msg_counter = 0
 
     try:
-        buffer = remainder
-        accumulated_rows = []
         while True:
             chunk = conn.recv(8192)
             if not chunk:
+                logger.info(f"[GATEWAY] Fin de stream para client_id={client_id}")
                 break
+
             buffer += chunk
+            buffer, new_msgs = _extract_complete_messages(buffer)
+            for header, row in new_msgs:
+                msg_counter += 1
+                msg_type = header.fields["message_type"].strip().upper()
+                source = header.fields["source"].strip()
 
-            buffer, new_rows = _extract_complete_messages(buffer)
-            accumulated_rows.extend(new_rows)
+                if msg_type == "DATA":
+                    accumulated_rows.append((header, row))
 
-            while len(accumulated_rows) >= MAX_ROWS:
-                batch = accumulated_rows[:MAX_ROWS]
-                accumulated_rows = accumulated_rows[MAX_ROWS:]
+                elif msg_type == "EOF":
+                    # Flush pendiente antes de EOF
+                    if accumulated_rows:
+                        try:
+                            _handle_deserialized_message(
+                                header=accumulated_rows[0][0],
+                                rows=[r for _, r in accumulated_rows],
+                                addr=addr,
+                                controller=controller,
+                                client_id=client_id,
+                                routing_keys_vistos=routing_keys_vistos,
+                            )
+                            logger.info(f"[GATEWAY] Flush final de {len(accumulated_rows)} filas antes de EOF ({source})")
+                        except Exception as e:
+                            logger.error(f"Error procesando batch antes de EOF: {e}")
+                        finally:
+                            accumulated_rows.clear()
+
+                    # Manejar EOF normalmente
+                    _handle_deserialized_message(
+                        header=header,
+                        rows=[],
+                        addr=addr,
+                        controller=controller,
+                        client_id=client_id,
+                        routing_keys_vistos=routing_keys_vistos,
+                    )
+
+            # Flush por tamaño (para archivos grandes)
+            if len(accumulated_rows) >= MAX_ROWS:
                 try:
-                    _handle_deserialized_message(header=batch[0][0], rows=[r for _, r in batch], addr=addr, controller=controller, client_id=client_id)
+                    _handle_deserialized_message(
+                        header=accumulated_rows[0][0],
+                        rows=[r for _, r in accumulated_rows],
+                        addr=addr,
+                        controller=controller,
+                        client_id=client_id,
+                        routing_keys_vistos=routing_keys_vistos,
+                    )
+                    logger.info(f"[GATEWAY] Flush intermedio de {len(accumulated_rows)} filas")
                 except Exception as e:
-                    logger.error(f"Error procesando batch: {e}")
+                    logger.error(f"Error procesando batch intermedio: {e}")
+                finally:
+                    accumulated_rows.clear()
+
+        # Flush si quedó algo pendiente al final de la conexión
+        if accumulated_rows:
+            try:
+                _handle_deserialized_message(
+                    header=accumulated_rows[0][0],
+                    rows=[r for _, r in accumulated_rows],
+                    addr=addr,
+                    controller=controller,
+                    client_id=client_id,
+                    routing_keys_vistos=routing_keys_vistos,
+                )
+                logger.info(f"[GATEWAY] Flush final al cerrar conexión ({len(accumulated_rows)} filas)")
+            except Exception as e:
+                logger.error(f"Error procesando batch final: {e}")
 
     except Exception as e:
         logger.error(f"[GATEWAY] Error en stream de {client_id}: {e}")
     finally:
         conn.close()
-        del client_streams[client_id]
+        client_streams.pop(client_id, None)
+        logger.info(f"[GATEWAY] Conexión cerrada para client_id={client_id}")
 
 def _extract_complete_messages(buffer: bytes):
     """
@@ -101,7 +158,6 @@ def _extract_complete_messages(buffer: bytes):
 
         payload_part = remaining[:next_sep]
         buffer = remaining[next_sep + len(SEPARATOR):]
-
         full_msg = header_part + SEPARATOR + payload_part
 
         try:
@@ -117,23 +173,30 @@ def _extract_complete_messages(buffer: bytes):
 
     return buffer, messages
 
-def _handle_deserialized_message(header, rows, addr, controller, client_id=None):
-    logger.info(f"[GATEWAY] Mensaje recibido de {addr}")
-    msg_type = header.fields["message_type"]
-    source = header.fields["source"]
+def _handle_deserialized_message(header, rows, addr, controller, client_id=None, routing_keys_vistos=None):
+    msg_type = header.fields["message_type"].strip().upper()
+    source = header.fields["source"].strip()
+    logger.info(f"[GATEWAY] Mensaje recibido de {addr}, source={source}, type={msg_type}")
 
-    if client_id and msg_type == "DATA":
+    # Registrar client_id para la fuente, incluso si no es DATA
+    if client_id and client_id in client_streams:
         controller.register_client_for_source(source, client_id, client_streams[client_id])
 
-    try:
-        routing_key = get_routing_key_from_filename(source)
-        clean_columns, raw_columns = get_schema_columns_by_source(source)
-    except ValueError as e:
-        logger.info(str(e))
-        return
-
     if msg_type == "DATA":
-        cleaned_rows = list(clean_rows(rows, clean_columns, raw_columns))
+        try:
+            routing_key = get_routing_key_from_filename(source)
+            if routing_keys_vistos is not None:
+                routing_keys_vistos.add(routing_key)
+                logger.info(f"[GATEWAY] Routing key registrado: {routing_key}")
+
+            clean_columns, _ = get_schema_columns_by_source(source)
+        except ValueError as e:
+            logger.info(f"[GATEWAY] Error obteniendo schema para {source}: {e}")
+            return
+
+        cleaned_rows = list(clean_rows(source, rows))
+        logger.info(f"[GATEWAY CLEAN] {source}: filas originales={len(rows)} → limpias={len(cleaned_rows)}")
+
         if cleaned_rows:
             controller.send_batch(
                 batch=cleaned_rows,
@@ -141,5 +204,12 @@ def _handle_deserialized_message(header, rows, addr, controller, client_id=None)
                 source=source,
                 schema=clean_columns,
             )
+            logger.info(
+                f"[GATEWAY → APP_CONTROLLER] PUBLICANDO BATCH: "
+                f"source={source}, routing_key={routing_key}, rows={len(cleaned_rows)}"
+            )
+
     elif msg_type == "EOF":
+        routing_key = source  # en EOF, source ya es la routing key
+        logger.info(f"[GATEWAY] EOF recibido para routing_key={routing_key}, reenviando a AppController")
         controller.send_end_of_file(routing_key=routing_key)

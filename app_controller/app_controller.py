@@ -75,6 +75,18 @@ class AppController:
         self._gateway_streams[client_id][query_id] = stream_socket
         logger.info(f"[GATEWAY STREAM] Registrado stream para client_id={client_id}, query_id={query_id}")
 
+    def register_client_stream(self, client_id, stream_sock):
+        if client_id not in self._gateway_streams:
+            self._gateway_streams[client_id] = {}
+        self._gateway_streams[client_id]["init"] = stream_sock
+
+        # Enviar CONTROLLER OK directamente desde acá
+        try:
+            stream_sock.sendall(b"===\nCONTROLLER OK\n===\n")
+            logger.info(f"[GATEWAY NOTIFY] Sent CONTROLLER OK to client_id={client_id}")
+        except Exception as e:
+            logger.warning(f"[GATEWAY NOTIFY] Failed to send CONTROLLER OK to {client_id}: {e}")
+
     def connect_to_middleware(self):
         try:
             self.mw_input = MessageMiddlewareExchange(
@@ -153,17 +165,22 @@ class AppController:
 
         def callback_results(ch, method, properties, body):
             try:
+                logger.info(f"[RESULT CALLBACK] Mensaje recibido en result_sink_queue: rk={method.routing_key}, len={len(body)}")
+                logger.info(f"[RESULT CALLBACK] Raw body:\n{body[:500]}...")  # primeros 500 bytes para debug
                 rk = method.routing_key  
                 header, rows = deserialize_message(body)
                 header_dict = header.as_dictionary()
                 query_id = header_dict["query_id"]
                 msg_type = header_dict["message_type"]
 
+                logger.info(f"[RESULT CALLBACK] msg_type={msg_type}, query_id={query_id}, rows={len(rows)}")
+                logger.info(f"[RESULT CALLBACK] header_dict={header_dict}")
+
                 if msg_type == "DATA":
                     self._stream_result_rows(query_id, header_dict, rows)
                     logger.info(f"[DATA RESULT] query_id={query_id}, {len(rows)} filas")
-                elif msg_type == "EOF": #esta asi xq los workers no mandan EOF, desp hay q descomentarloooo
-                #    logger.info(f"[EOF RESULT] Finalizó query_id={query_id}. Reporte listo.")
+                elif msg_type == "EOF":
+                    logger.info(f"[EOF RESULT] Finalizó query_id={query_id}. Reporte listo.")
                     logger.info(f"===================== EOF of [{rk}] =======================")
                     self._close_report_stream(query_id)
           
@@ -245,6 +262,10 @@ class AppController:
             return self._report_streams[query_id]
 
         try:
+            logger.info(f"[CREATE REPORT STREAM] query_id={query_id}, header_dict={header_dict}")
+            logger.info(f"[CREATE REPORT STREAM] _client_ids_by_source={self._client_ids_by_source}")
+            logger.info(f"[CREATE REPORT STREAM] _gateway_streams={self._gateway_streams}")
+
             source = header_dict.get("source")
             client_id = self._client_ids_by_source.get(source)
             if not client_id:
@@ -254,6 +275,7 @@ class AppController:
             if not stream_sock:
                 raise RuntimeError(f"No hay stream registrado para client_id={client_id} y query_id={query_id}")
 
+            logger.info(f"[CREATE REPORT STREAM] Enviando cabecera CSV al Gateway para query_id={query_id}, client_id={client_id}")
             stream_sock.sendall(f"{client_id}\n===\n{query_id}\n===\n".encode("utf-8")) 
             raw = stream_sock.makefile('wb', buffering=0)  
             text_io = io.TextIOWrapper(raw, encoding='utf-8', newline='', write_through=True)
@@ -261,9 +283,9 @@ class AppController:
             writer.writeheader()
             text_io.flush()
 
-            logger.debug(f"[DEBUG] create_report_stream: query_id={query_id}, source={source}, client_id={client_id}")
-            logger.debug(f"[DEBUG] Estado actual de _gateway_streams: {self._gateway_streams}")
-            logger.debug(f"[DEBUG] Stream encontrado: {stream_sock}")
+            logger.info(f"[DEBUG] create_report_stream: query_id={query_id}, source={source}, client_id={client_id}")
+            logger.info(f"[DEBUG] Estado actual de _gateway_streams: {self._gateway_streams}")
+            logger.info(f"[DEBUG] Stream encontrado: {stream_sock}")
             
 
             self._report_streams[query_id] = (stream_sock, text_io, writer)
@@ -281,6 +303,7 @@ class AppController:
             sock, text_io, writer = stream
             try:
                 text_io.flush()
+                sock.sendall(SEPARATOR)
                 logger.info(f"[REPORT STREAM] Cerrado writer para query_id={query_id}")
             except Exception as e:
                 logger.error(f"Error cerrando writer de stream de reporte {query_id}: {e}")
@@ -324,9 +347,9 @@ class AppController:
         for qid in query_ids:
             self._gateway_streams[client_id][qid] = stream_socket
         
-        logger.debug(f"[DEBUG] register_client_for_source: source={source}, base={base}, client_id={client_id}, query_ids={query_ids}")
-        logger.debug(f"[DEBUG] Streams registrados para client_id={client_id}: {list(self._gateway_streams[client_id].keys())}")
-        logger.debug(f"[DEBUG] Estado completo de _gateway_streams: {self._gateway_streams}")
+        logger.info(f"[DEBUG] register_client_for_source: source={source}, base={base}, client_id={client_id}, query_ids={query_ids}")
+        logger.info(f"[DEBUG] Streams registrados para client_id={client_id}: {list(self._gateway_streams[client_id].keys())}")
+        logger.info(f"[DEBUG] Estado completo de _gateway_streams: {self._gateway_streams}")
         
         logger.info(f"[GATEWAY] Registrado client_id={client_id} para source={source}")
     
@@ -346,7 +369,7 @@ class AppController:
                     sock = self._gateway_streams[client_id][qid]
                     sock.shutdown(socket.SHUT_WR)
                     sock.close()
-                    logger.debug(f"[SOCKET CLOSED] client_id={client_id}, query_id={qid}")
+                    logger.info(f"[SOCKET CLOSED] client_id={client_id}, query_id={qid}")
                 except Exception as e:
                     logger.warning(f"No se pudo cerrar el stream de {qid}: {e}")
 

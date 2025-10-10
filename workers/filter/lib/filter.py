@@ -72,7 +72,7 @@ class Filter:
                 self.result_mw.send_to(self.output_exchange, "", payload)
             else:
                 for rk in routing_keys:
-                    logger.info(f"Sent Data through {self.output_exchange} --> {rk}")
+                    logger.info(f"Sent Data through {self.output_exchange} --> {rk}: {len(rows)} rows")
                     self.result_mw.send_to(self.output_exchange, rk, payload)
         except Exception as e:
             logger.error(f"Error sending stream data: {e}")
@@ -116,6 +116,7 @@ class YearFilter(Filter):
         try:
             header, rows = deserialize_message(body)
             source = header.fields.get("source", "")
+            logger.info(f"[YEAR FILTER] msg_type={header.fields.get('message_type')}, len(rows)={len(rows)}, source={source}")
 
             # --- Caso EOF ---
             if header.fields.get("message_type") == "EOF":
@@ -201,7 +202,7 @@ class HourFilter(Filter):
                 logger.info(F"Source en el data {header.fields.get('source')}")
                 for row in rows:
                     # logger.info(f"FilterHour processing stream data")
-                    hour = int(row["created_at"].split(" ")[1].split(":")[0])
+                    hour = int(row["created_at"].split("T")[1].split(":")[0])
                     if 6 <= hour < 23:
                         if header.fields["source"].startswith("store_join"):
                             row.pop("transaction_id", None)

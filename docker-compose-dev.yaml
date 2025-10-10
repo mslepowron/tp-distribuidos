@@ -122,7 +122,7 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
-      - JOIN_TYPE=Menu
+      - JOIN_TYPE=MenuJoin
       - QUEUE_NAME=join_menu_q
       - INPUT_BINDINGS=[["input_file_ex","direct","menu_items"],["filter_year_ex","direct","transaction_items"]]
       - OUTPUT_EXCHANGE=menu_items_ex

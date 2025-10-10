@@ -245,8 +245,11 @@ class MenuJoin(Join):
             raise KeyError(f"Schema '{raw_fieldnames}' no encontrado en SCHEMAS")
 
     def on_data_message(self, source, header, rows):
+        logger.info(f"[ON_DATA] Source={source}, Rows={len(rows)}")
         if source.startswith(self.PIVOT_FILE):
+                logger.info(f"[ON_DATA] Actualizando índice pivot con {len(rows)} filas")
                 self.update_index(rows, "item_id", "item_name")
+                logger.info(f"[ON_DATA] Index size={len(self.source_file_index)}")
 
         elif source.startswith(self.FILE_IN_BATCHS):
             if not self.source_file_closed:
@@ -254,6 +257,7 @@ class MenuJoin(Join):
                 storage_path = self.storage / f"{self.FILE_IN_BATCHS}.csv"
                 self._append_rows(storage_path, rows)
             else:
+                logger.info("[ON_DATA] Pivot ya cerrado, joineando batch")
                 joined = self._join_batch(rows)
                 self.print_joined_rows(joined)
                 self._send_rows(header, self.SOURCE, joined, self.output_rk)
@@ -263,11 +267,14 @@ class MenuJoin(Join):
     
     def callback(self, ch, method, properties, body):
         try:
+            logger.info(f"[CALLBACK] Mensaje recibido en MenuJoin: rk={method.routing_key}, {len(body)} bytes")
             header, rows = deserialize_message(body)
             
             source = (header.fields.get("source") or "").lower()
             message_type = header.fields.get("message_type")
             message_stage = header.fields.get("stage")
+
+            logger.info(f"[CALLBACK] source={source}, type={message_type}, stage={message_stage}, rows={len(rows)}")
 
             # EOF
             if message_type == "EOF":
@@ -281,6 +288,7 @@ class MenuJoin(Join):
                     return
 
             res = self.on_data_message(source, header, rows)
+            logger.info(f"[CALLBACK] on_data_message devolvió: {res}")
             if res:
                 if ch is not None and hasattr(method, "delivery_tag"):
                         ch.basic_ack(delivery_tag=method.delivery_tag)
