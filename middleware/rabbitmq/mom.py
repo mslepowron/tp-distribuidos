@@ -15,6 +15,7 @@ MAX_RETRIES = 5
 DELAY = 5
 AMQP_PORT = 5672
 INITIAL_DELAY = 1  # segundos (1, 2, 4, 8, 16...)
+PREFETCH_COUNT = 1
 
 Binding = Tuple[str, str, str] #Info de (exchange, exchange?type, routing_key)
 
@@ -54,6 +55,7 @@ class MessageMiddlewareQueue(MessageMiddleware):
     def start_consuming(self, on_message_callback):
         try:
             self._consuming = True
+            self.channel.basic_qos(prefetch_count=PREFETCH_COUNT)
             self.channel.basic_consume(
                 queue=self.queue_name,
                 on_message_callback=on_message_callback,
@@ -173,6 +175,7 @@ class MessageMiddlewareExchange(MessageMiddleware):
     def start_consuming(self, on_message_callback):
         try:
             self._consuming = True
+            self.channel.basic_qos(prefetch_count=PREFETCH_COUNT)
             self.channel.basic_consume(
                 queue=self.queue_name,
                 on_message_callback=on_message_callback,

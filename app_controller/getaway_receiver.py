@@ -1,0 +1,145 @@
+import ast
+import socket
+import threading
+import logging
+from communication.protocol.deserialize import deserialize_message
+from initializer import clean_rows, get_schema_columns_by_source, get_routing_key_from_filename
+from io import StringIO
+import csv
+from app_controller import AppController
+import time
+
+logger = logging.getLogger("gateway-receiver")
+
+MAX_ROWS = 50000
+BUFFER_SIZE = 1024
+SEPARATOR = b"\n===\n"
+client_streams = {}
+
+def start_tcp_listener(port, controller):
+    logger.info(f"AppController TCP listening on port {port}...")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_sock.bind(("", port))
+        server_sock.listen()
+
+        while True:
+            conn, addr = server_sock.accept()
+            logger.info(f"Conexión entrante desde {addr}")
+            threading.Thread(target=handle_connection, args=(conn, addr, controller), daemon=True).start()
+
+def handle_connection(conn: socket.socket, addr, controller: AppController):
+    logger.info(f"[GATEWAY] Conexión entrante desde {addr}")
+    
+    while not controller.is_available():
+        logger.info("App controller no esta listo, espero")
+        time.sleep(5)
+
+    # controller.notify_gateway_controller_is_up()
+    conn.sendall(f"===\nCONTROLLER OK\n===\n".encode("utf-8"))
+
+    buffer = b""
+    while buffer.count(SEPARATOR) < 1:
+        chunk = conn.recv(BUFFER_SIZE)
+        if not chunk:
+            logger.error("[GATEWAY] No se recibió client_id inicial.")
+            logger.error(f"Buffer recibido: {buffer!r}")
+            return
+        buffer += chunk
+
+    parts = buffer.split(SEPARATOR, 1)
+    client_id = parts[0].decode().strip()
+    remainder = parts[1] if len(parts) > 1 else b""
+
+    logger.info(f"[GATEWAY] Conexión asociada a client_id={client_id}")
+    client_streams[client_id] = conn  # registrar conexión viva
+
+    try:
+        buffer = remainder
+        accumulated_rows = []
+        while True:
+            chunk = conn.recv(8192)
+            if not chunk:
+                break
+            buffer += chunk
+
+            buffer, new_rows = _extract_complete_messages(buffer)
+            accumulated_rows.extend(new_rows)
+
+            while len(accumulated_rows) >= MAX_ROWS:
+                batch = accumulated_rows[:MAX_ROWS]
+                accumulated_rows = accumulated_rows[MAX_ROWS:]
+                try:
+                    _handle_deserialized_message(header=batch[0][0], rows=[r for _, r in batch], addr=addr, controller=controller, client_id=client_id)
+                except Exception as e:
+                    logger.error(f"Error procesando batch: {e}")
+
+    except Exception as e:
+        logger.error(f"[GATEWAY] Error en stream de {client_id}: {e}")
+    finally:
+        conn.close()
+        del client_streams[client_id]
+
+def _extract_complete_messages(buffer: bytes):
+    """
+    Extrae todos los mensajes completos posibles del buffer.
+    Devuelve el resto del buffer y una lista de tuplas (header, fila) o (header, []) si EOF.
+    """
+    messages = []
+
+    while True:
+        sep_index = buffer.find(SEPARATOR)
+        if sep_index == -1:
+            break  # no hay mensaje completo todavía
+
+        header_part = buffer[:sep_index]
+        remaining = buffer[sep_index + len(SEPARATOR):]
+
+        next_sep = remaining.find(SEPARATOR)
+        if next_sep == -1:
+            break  # el payload está incompleto
+
+        payload_part = remaining[:next_sep]
+        buffer = remaining[next_sep + len(SEPARATOR):]
+
+        full_msg = header_part + SEPARATOR + payload_part
+
+        try:
+            header, rows = deserialize_message(full_msg)
+            if rows:
+                for row in rows:
+                    messages.append((header, row))
+            else:
+                messages.append((header, []))  # para EOF o mensajes vacíos
+        except Exception as e:
+            logger.error(f"Error deserializando mensaje: {e}")
+            break
+
+    return buffer, messages
+
+def _handle_deserialized_message(header, rows, addr, controller, client_id=None):
+    logger.info(f"[GATEWAY] Mensaje recibido de {addr}")
+    msg_type = header.fields["message_type"]
+    source = header.fields["source"]
+
+    if client_id and msg_type == "DATA":
+        controller.register_client_for_source(source, client_id, client_streams[client_id])
+
+    try:
+        routing_key = get_routing_key_from_filename(source)
+        clean_columns, raw_columns = get_schema_columns_by_source(source)
+    except ValueError as e:
+        logger.info(str(e))
+        return
+
+    if msg_type == "DATA":
+        cleaned_rows = list(clean_rows(rows, clean_columns, raw_columns))
+        if cleaned_rows:
+            controller.send_batch(
+                batch=cleaned_rows,
+                routing_key=routing_key,
+                source=source,
+                schema=clean_columns,
+            )
+    elif msg_type == "EOF":
+        controller.send_end_of_file(routing_key=routing_key)

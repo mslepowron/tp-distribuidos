@@ -2,23 +2,29 @@
 TP Grupal Sistemas Distribuidos 2C 2025
 
 ## Ejecucion
-1. levantar servicios declarados en el compose
+1. Generar el archivo docker-compose con:
     ```bash
-        ./run.sh
+        make compose
+    ```
+La cantidad de cada tipo de nodos se especifica desde el archivo de configuracion global.
+
+2. Ejecutar el sistema:
+    ```bash
+        make up
     ```
 
-2. ver logs en vivo:
+3. Ver logs en vivo
     ```bash
-        docker compose -f docker-compose-dev.yaml logs -f <<service name>>
+        make logs S=<<service name>>
     ```
-3. chequear que containers hay levantados:
+4. Chequear que containers hay levantados:
    ```bash
-        docker compose -f docker-compose-dev.yaml ps
+        make ps
     ```
 
-4. Detener la ejecuci'on y bajar los containers:
+4. Detener la ejecucion y bajar los containers:
     ```bash
-        ./stop.sh
+        make down
     ```
 
 Se puede ver la UI de rabbit desde la web con: http://localhost:15672
@@ -26,22 +32,17 @@ Se puede ver la UI de rabbit desde la web con: http://localhost:15672
 ## Tests Unitarios del Middleware
 1. Levantar el docker compose de rabbit para los tests:
     ```bash
-        docker compose -f docker-compose-tests.yaml up -d
+        make test-up
     ```
 2. Crear un entorno virtual para correr los tests: 
     ```bash
-        python3 -m venv venv
-        source venv/bin/activate
+        make venv
     ```
-3. Instalar las dependencias necesarias
+3. Correr los tests
     ```bash
-        pip install -r requirements.txt
+        make test
     ```
-4. Correr los tests
+5. Detener el container de RabbitMq de tests:
     ```bash
-        pytest -v tests/
-    ```
-5. Detener el container de test:
-    ```bash
-        docker compose -f docker-compose-tests.yaml stop -t 1
+        make test-down
     ```

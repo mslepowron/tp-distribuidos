@@ -32,6 +32,20 @@ services:
       - ./app_controller/storage:/storage
     networks:
       - coffee_analysis_net
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    depends_on:
+      - app_controller
+    environment:
+      - APP_CONTROLLER_HOST=app_controller
+      - APP_CONTROLLER_PORT=9100
+    ports:
+      - "9000:9000"
+      - "9200:9200"
+    networks:
+      - coffee_analysis_net
   #  ---------------------------------------
   filter_year:
     build:
@@ -119,24 +133,24 @@ services:
     networks:
       - coffee_analysis_net
   #  --------------------------------------- JOIN Q4
-  join_users:
-    build:
-      context: .
-      dockerfile: workers/join/Dockerfile
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      - JOIN_TYPE=User
-      - QUEUE_NAME=join_users_q
-      - INPUT_BINDINGS=[["input_file_ex","direct","users"],["top_user_birthdays_ex","direct","top_user_birthdays"]]
-      - OUTPUT_EXCHANGE=results_ex
-      - OUTPUT_RKS=["q_top3_birthdays"]
-      - STORAGE_DIR=/storage
-    volumes:
-      - ./storage:/storage
-    networks:
-      - coffee_analysis_net
+  # join_users:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/join/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - JOIN_TYPE=User
+  #     - QUEUE_NAME=join_users_q
+  #     - INPUT_BINDINGS=[["input_file_ex","direct","users"],["top_user_birthdays_ex","direct","top_user_birthdays"]]
+  #     - OUTPUT_EXCHANGE=results_ex
+  #     - OUTPUT_RKS=["q_top3_birthdays"]
+  #     - STORAGE_DIR=/storage
+  #   volumes:
+  #     - ./storage:/storage
+  #   networks:
+  #     - coffee_analysis_net
   #  --------------------------------------- MAP de Q2
   map_year_month:
     build:
@@ -218,21 +232,21 @@ services:
     networks:
       - coffee_analysis_net
   #  --------------------------------------- REDUCE Q4
-  reduce_user_purchases:
-    build:
-      context: .
-      dockerfile: workers/reduce/Dockerfile
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      - REDUCE_TYPE=user_purchases
-      - QUEUE_NAME=reduce_user_purchases_q
-      - INPUT_BINDINGS=[["join_stores_ex","direct","reduce_user_purchases"]]
-      - OUTPUT_EXCHANGE=reduce_user_purchase_ex
-      - OUTPUT_RKS=["top_user_purchase"]
-    networks:
-      - coffee_analysis_net
+  # reduce_user_purchases:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/reduce/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - REDUCE_TYPE=user_purchases
+  #     - QUEUE_NAME=reduce_user_purchases_q
+  #     - INPUT_BINDINGS=[["join_stores_ex","direct","reduce_user_purchases"]]
+  #     - OUTPUT_EXCHANGE=reduce_user_purchase_ex
+  #     - OUTPUT_RKS=["top_user_purchase"]
+  #   networks:
+  #     - coffee_analysis_net
   #  --------------------------------------- TOP Q2.1
   top_selling_items:
     build:
@@ -266,19 +280,36 @@ services:
     networks:
       - coffee_analysis_net
   #  --------------------------------------- TOP Q4 
-  top_store_user_purchases:
+  # top_store_user_purchases:
+  #   build:
+  #     context: .
+  #     dockerfile: workers/top/Dockerfile
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   environment:
+  #     - TOP_TYPE=TopStoreUserPurchases
+  #     - QUEUE_NAME=top_user_purchases_q
+  #     - INPUT_BINDINGS=[["reduce_user_purchase_ex","direct","top_user_purchase"]]
+  #     - OUTPUT_EXCHANGE=top_user_birthdays_ex
+  #     - OUTPUT_RKS=["top_user_birthdays"]
+  #   networks:
+  #     - coffee_analysis_net
+  client_1:
     build:
       context: .
-      dockerfile: workers/top/Dockerfile
+      dockerfile: client/Dockerfile
     depends_on:
-      rabbitmq:
-        condition: service_healthy
+      - gateway
     environment:
-      - TOP_TYPE=TopStoreUserPurchases
-      - QUEUE_NAME=top_user_purchases_q
-      - INPUT_BINDINGS=[["reduce_user_purchase_ex","direct","top_user_purchase"]]
-      - OUTPUT_EXCHANGE=top_user_birthdays_ex
-      - OUTPUT_RKS=["top_user_birthdays"]
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=9000
+      - BATCH_SIZE=50000
+      - RAW_DATA_DIR=/data
+      - OUTPUT_DIR=/report
+    volumes:
+      - ./client/data:/data:ro
+      - ./client/report/client_1:/report
     networks:
       - coffee_analysis_net
 networks:
